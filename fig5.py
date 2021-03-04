@@ -8,11 +8,11 @@ Feb 2021
 This python script outputs graphs for Figure 5 of the paper. This includes:
 
 part b) Crossbar heatmap at final epoch.
-     - heatmap.png (heatmap of full 24x24 crossbar)
-     - W.png (heatmap of ODE network weight W)
-     - W_h.png (heatmap of hidden layer -> hidden_layer RNN weight)
-     - W_x.png (heatmap of input -> hidden_layer RNN weights)
-     - W_o.png (heatmap of output linear layer)
+     - 4.png
+        - .png (heatmap of ODE network weight W)
+        - h.png (heatmap of hidden layer -> hidden_layer RNN weight)
+        - x.png (heatmap of input -> hidden_layer RNN weights)
+        - o.png (heatmap of output linear layer)
 part c) RMS error vs. Epoch for 20 models.
      - training.png
 part d) Diagram of evolution of hidden state and output.
@@ -141,11 +141,11 @@ for i in range(1):
     unmapped_weights = torch.cat([tensor.reshape(-1).detach() for tensor in model.cb.tensors], axis=0)
     ax4.hist(unmapped_weights.numpy().reshape(-1), bins=20, color='pink')
 
-    left_mapped_weights = torch.cat([model.cb.W[m[0]:m[0]+m[2]:2, m[1]:m[1]+m[3]:2].reshape(-1).detach() for m in model.cb.mapped], axis=0).numpy().reshape(-1, 1)
-    right_mapped_weights = torch.cat([model.cb.W[m[0]+1:m[0]+m[2]+1:2, m[1]+1:m[1]+m[3]+1:2].reshape(-1).detach() for m in model.cb.mapped], axis=0).numpy().reshape(-1,1)
+    left_mapped_weights = torch.cat([model.cb.W[m[0]:m[0]+m[2], m[1]:m[1]+m[3]:2].reshape(-1).detach() for m in model.cb.mapped], axis=0).numpy().reshape(-1, 1)
+    right_mapped_weights = torch.cat([model.cb.W[m[0]+1:m[0]+m[2]+1, m[1]+1:m[1]+m[3]+1:2].reshape(-1).detach() for m in model.cb.mapped], axis=0).numpy().reshape(-1,1)
     ax5.hist(np.concatenate((left_mapped_weights, right_mapped_weights), axis=1), stacked=True, bins=20)
 
-    weights = [model.cb.W[coord[0]:coord[0]+coord[2], coord[1]:coord[1]+coord[3]] for coord in model.cb.mapped] + [model.cb.W]
+    weights = [model.cb.W[coord[0]:coord[0]+coord[2], coord[1]*2:coord[1]*2+coord[3]*2] for coord in model.cb.mapped] + [model.cb.W]
     vmax = max(torch.max(weight) for weight in weights)
     vmin = min(torch.min(weight) for weight in weights)
     for i, weight in enumerate(weights):
