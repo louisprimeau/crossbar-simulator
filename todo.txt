@@ -4,7 +4,6 @@ As can be seen, there is a lot to do. * indicates important. Some of these thing
 (1) fix crossbar bad prediction
 (2) Finish fig5.py
   * solve training issue for rnn-odes for interpolation
-  * Heatmaps of weights
   * More epochs for training figure
   - Prettify figures, get the right fonts, make sure axes are right size, whatever.
 (3) merge crossbar/crossbar_viability.py into crossbar/crossbar.py and test
@@ -37,3 +36,7 @@ As can be seen, there is a lot to do. * indicates important. Some of these thing
 (7) Documentation
   - Explain how mapping works, how it can be implemented into C code
   - General docs stuff
+(8) Repository
+  - use git issues instead of these notes lol
+  - put in adjoint method code from forever ago
+  - put in old solvers, etc.

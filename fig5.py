@@ -31,7 +31,7 @@ import time
 import random
 import matplotlib.pyplot as plt
 import numpy as np
-
+import seaborn as sns
 pi = 3.14159265359
 
 # DEVICE PARAMS for convenience.        
@@ -69,8 +69,17 @@ train_data, test_start = data[:cutoff], data[cutoff]
 
 # CONFIGURE PLOTS
 fig1, (ax1, ax2) = plt.subplots(nrows=2, sharex=True)
+
 fig3, ax3 = plt.subplots()
+
 fig4, (ax4, ax5) = plt.subplots(nrows=2, figsize=(8,6))
+
+fig5, ax_cmap = plt.subplots(ncols=5, figsize=(20, 3))
+cmap = sns.diverging_palette(250, 300, s=90, as_cmap=True)
+for ax in ax_cmap:
+    ax.set(xticklabels=[])
+    ax.set(yticklabels=[])
+
 
 # TRAIN MODELS AND PLOT
 time_steps = 50
@@ -135,6 +144,12 @@ for i in range(1):
     left_mapped_weights = torch.cat([model.cb.W[m[0]:m[0]+m[2]:2, m[1]:m[1]+m[3]:2].reshape(-1).detach() for m in model.cb.mapped], axis=0).numpy().reshape(-1, 1)
     right_mapped_weights = torch.cat([model.cb.W[m[0]+1:m[0]+m[2]+1:2, m[1]+1:m[1]+m[3]+1:2].reshape(-1).detach() for m in model.cb.mapped], axis=0).numpy().reshape(-1,1)
     ax5.hist(np.concatenate((left_mapped_weights, right_mapped_weights), axis=1), stacked=True, bins=20)
+
+    weights = [model.cb.W[coord[0]:coord[0]+coord[2], coord[1]:coord[1]+coord[3]] for coord in model.cb.mapped] + [model.cb.W]
+    vmax = max(torch.max(weight) for weight in weights)
+    vmin = min(torch.min(weight) for weight in weights)
+    for i, weight in enumerate(weights):
+        sns.heatmap(weight, vmax=vmax, vmin=vmin, cmap=cmap, square=True, cbar=False, ax=ax_cmap[i])
     
 ax1.plot(x.squeeze()[:cutoff+num_predict+tw], y.squeeze()[:cutoff+num_predict+tw], linewidth=0.5, color='k', linestyle='dashed')
 ax1.axvline(x=float(x.squeeze()[cutoff + tw - 1]), color='k')
@@ -167,6 +182,7 @@ plt.setp(ax5, xlabel='Mapped Weights')
 fig1.savefig('output/fig5/1.png', dpi=600, transparent=True)
 fig3.savefig('output/fig5/2.png', dpi=600, transparent=True)
 fig4.savefig('output/fig5/3.png', dpi=600, transparent=True)
+fig5.savefig('output/fig5/4.png', dpi=600, transparent=True)
 
 plt.show()
 
