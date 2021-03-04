@@ -1,16 +1,24 @@
 TODO
-* indicates important
+As can be seen, there is a lot to do. * indicates important. Some of these things may not be done by publication. Maybe the crossbar model can be its own smaller publication, or an ArXiv paper. 
 
 (1) fix crossbar bad prediction
 (2) Finish fig5.py
   * solve training issue for rnn-odes for interpolation
   * Heatmaps of weights
+  * More epochs for training figure
   - Prettify figures, get the right fonts, make sure axes are right size, whatever.
 (3) merge crossbar/crossbar_viability.py into crossbar/crossbar.py and test
 (4) Write fig6.py models and outputs
   * Spiral datasets
   * caption
   * noise plots
+(5) Actual science questions
+  * effects of different solvers
+  * Variability impact on node vs convential
+  * Figure out what NODE-RNNs are used for in the original paper, some kind of gaussian mixture model.
+  - energy efficiency
+  - effect of time mesh size
+  * Characterize data movement
 (5) write more networks with crossbar integration
   - Convolutions
   - Avg Pooling
