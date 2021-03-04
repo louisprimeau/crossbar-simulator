@@ -1,6 +1,7 @@
 import torch
-import crossbar
-import observer
+from .crossbar import crossbar
+from . import Linear, ODE_net
+from . import observer
         
 class NODERNN(torch.nn.Module):
     def __init__(self, input_size, hidden_layer_size, cb, N):
@@ -11,9 +12,9 @@ class NODERNN(torch.nn.Module):
         self.cb = cb
         self.observer = observer.observer()
 
-        self.linear_in = Linear(input_size, hidden_layer_size, cb)
-        self.linear_hidden = Linear(hidden_layer_size, hidden_layer_size, cb)
-        self.solve = eulerforward(hidden_layer_size, N, cb, self.observer)
+        self.linear_in = Linear.Linear(input_size, hidden_layer_size, cb)
+        self.linear_hidden = Linear.Linear(hidden_layer_size, hidden_layer_size, cb)
+        self.solve = ODE_net.eulerforward(hidden_layer_size, N, cb, self.observer)
         self.nonlinear = torch.nn.Tanh()
 
     # Taking a sequence, this predicts the next N points, where 

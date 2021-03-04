@@ -2,16 +2,15 @@
 TODO
 Sort of in order:
 
-(1) resolve package stuff for new split of files from cbroutines
-(2) fix crossbar bad prediction
-(3) Finish fig5.py
+(1) fix crossbar bad prediction
+(2) Finish fig5.py
   - solve training issue for rnn-odes for interpolation
   - Heatmaps of weights
-(4) merge crossbar/crossbar_viability.py into crossbar/crossbar.py and test
-(5) Write fig6.py models and outputs
+(3) merge crossbar/crossbar_viability.py into crossbar/crossbar.py and test
+(4) Write fig6.py models and outputs
   - Spiral datasets
   - caption
   - noise plots
-(6) fit memristor data to matlab model, get parameters
+(5) fit memristor data to matlab model, get parameters
   - Integrate memristor python model into crossbar
     - Write iterative circuit solver (basic euler's method?)

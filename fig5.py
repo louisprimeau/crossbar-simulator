@@ -24,7 +24,7 @@ part e) Prediction of RNN-ODE vs. prediction of RNN with similar amount of weigh
 """
 
 import torch
-import rnn_ode
+import networks.rnn_ode as rnn_ode
 import train
 
 import time

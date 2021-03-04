@@ -1,14 +1,14 @@
 import torch
-import crossbar
-import cbroutines
+from . import Linear, ODERNN
+from .crossbar import crossbar
 import seaborn as sns
 
 class RNN_ODE(torch.nn.Module):
     def __init__(self, input_size, hidden_layer_size, output_size, device_params, time_steps):
         super(RNN_ODE, self).__init__()
         self.cb = crossbar.crossbar(device_params)
-        self.node_rnn = cbroutines.NODERNN(input_size, hidden_layer_size, self.cb, time_steps)
-        self.linear = cbroutines.Linear(hidden_layer_size, output_size, self.cb)
+        self.node_rnn = ODERNN.NODERNN(input_size, hidden_layer_size, self.cb, time_steps)
+        self.linear = Linear.Linear(hidden_layer_size, output_size, self.cb)
 
     def forward(self, data):
         return self.linear(self.node_rnn(*data))

@@ -1,13 +1,13 @@
 import torch
-import crossbar
-import observer
+from .crossbar import crossbar
+from . import observer, Linear
 
 class eulerforward(torch.nn.Module):
     def __init__(self, hidden_layer_size, N, cb, observer):
         super(eulerforward, self).__init__()
         self.hidden_layer_size = hidden_layer_size
         self.cb = cb
-        self.linear = Linear(hidden_layer_size, hidden_layer_size, cb)
+        self.linear = Linear.Linear(hidden_layer_size, hidden_layer_size, cb)
         self.N = N
         self.nonlinear = torch.nn.Tanh()
         self.observer = observer

@@ -1,7 +1,7 @@
 .pyc
 .csv
 __pycache__/
-
+.DS_store
 *~
 \#*\#
 /.emacs.desktop

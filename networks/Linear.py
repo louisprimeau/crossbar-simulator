@@ -1,5 +1,5 @@
 import torch
-import crossbar
+from .crossbar import crossbar
 
 class linear(torch.autograd.Function):
     @staticmethod
