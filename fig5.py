@@ -69,10 +69,8 @@ train_data, test_start = data[:cutoff], data[cutoff]
 
 # CONFIGURE PLOTS
 fig1, (ax1, ax2) = plt.subplots(nrows=2, sharex=True)
-
 fig3, ax3 = plt.subplots()
-
-fig4, (ax4, ax5) = plt.subplots(nrows=2)
+fig4, (ax4, ax5) = plt.subplots(nrows=2, figsize=(8,6))
 
 # TRAIN MODELS AND PLOT
 time_steps = 50
@@ -144,7 +142,7 @@ ax1.spines['right'].set_visible(False)
 ax1.spines['top'].set_visible(False)
 
 plt.setp(ax1, ylabel='real space')
-ax1.legend(('predictions', 'interpolation', 'data'))
+ax1.legend(('predictions', 'interpolation', 'data'), loc='lower left')
 
 ax2.spines['right'].set_visible(False)
 ax2.spines['top'].set_visible(False)
@@ -155,6 +153,9 @@ plt.setp(ax2, ylabel='norm of hidden state')
 ax3.spines['right'].set_visible(False)
 ax3.spines['top'].set_visible(False)
 
+plt.setp(ax3, xlabel='Epoch')
+plt.setp(ax3, ylabel='RMS Prediction Accuracy')
+
 ax4.spines['right'].set_visible(False)
 ax4.spines['top'].set_visible(False)
 plt.setp(ax4, xlabel='Unmapped Weights')
@@ -162,6 +163,10 @@ plt.setp(ax4, xlabel='Unmapped Weights')
 ax5.spines['right'].set_visible(False)
 ax5.spines['top'].set_visible(False)
 plt.setp(ax5, xlabel='Mapped Weights')
+
+fig1.savefig('output/fig5/1.png', dpi=600, transparent=True)
+fig3.savefig('output/fig5/2.png', dpi=600, transparent=True)
+fig4.savefig('output/fig5/3.png', dpi=600, transparent=True)
 
 plt.show()
 

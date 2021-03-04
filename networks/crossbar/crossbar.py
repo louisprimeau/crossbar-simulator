@@ -24,7 +24,6 @@ class MinMaxScaler(object):
 
 class crossbar:
     def __init__(self, device_params):
-
         
         # Power Supply Voltage
         self.V = device_params["Vdd"]
