@@ -1,9 +1,10 @@
 """
-crossbar_variability.py
+crossbary.py
 Louis Primeau
 University of Toronto Department of Electrical and Computer Engineering
 louis.primeau@mail.utoronto.ca
 July 29th 2020
+Last updated: March 18th 2021
 """
 
 import torch
@@ -241,8 +242,8 @@ class crossbar:
             for i in range(row, row + scaled_matrix.size(0)):
                for j in range(col, col + scaled_matrix.size(1)):
                    midpoint = (self.g_on[i,j] - self.g_off[i,j]) / 2 + self.g_off[i,j]
-                   right_state = midpoint + scaled_matrix[i,j] / 2
-                   left_state = midpoint - scaled_matrix[i,j] / 2
+                   right_state = midpoint + scaled_matrix[i-row,j-col] / 2
+                   left_state = midpoint - scaled_matrix[i-row,j-col] / 2
                    
                    self.W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0,std=right_state*self.viability), i, 2*j+1)
                    self.W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j)
@@ -274,8 +275,7 @@ class crossbar:
         self.tensors = []
         self.saved_tiles = {}
         self.W = torch.ones(self.size) * self.g_on
-         
-       
+                
 class ticket:
     def __init__(self, row, col, m_rows, m_cols, matrix, mat_scale_factor, crossbar):
         self.row, self.col = row, col
@@ -349,7 +349,8 @@ device_params = {"Vdd": 1.8,
                  "p_stuck_off": 0.01,
                  "method": "viability",
                  "viability": 0.05,
-}    
+}
+
 device_params = {"Vdd": 1.8,
                  "r_wl": 20,
                  "r_bl": 20,
@@ -372,7 +373,7 @@ device_params = {"Vdd": 1.8,
                  "method": "linear",
 }
 
-
+#Utility function, should be moved
 def print_mapping(tensors, mapping, crossbar_size):
     cb = torch.zeros(*crossbar_size)
     for t, m in zip(tensors, mapping):
@@ -383,21 +384,3 @@ def print_mapping(tensors, mapping, crossbar_size):
     for val in zip(rows,cols,values):
         print(val[0], val[1], val[2], sep=", ")
 
-"""3 mm - 300 ohm"""
-"""
-
-crb = crossbar(device_params)
-
-A = torch.Tensor([[1,0],
-                  [0,4]]).view(-1,2)
-
-b = torch.Tensor([1,1]).view(-1,1)
-
-
-A = torch.ones(8,4)
-b = torch.ones(8,1)
-
-
-print("output", crb.vmm(b,A) / 1.79345)
-print(b.view(1,-1).mm(A))
-"""

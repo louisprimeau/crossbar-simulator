@@ -1,28 +1,26 @@
 TODO
 As can be seen, there is a lot to do. * indicates important. Some of these things may not be done by publication. Maybe the crossbar model can be its own smaller publication, or an ArXiv paper. 
 
-(1) fix crossbar bad prediction
-(2) Finish fig5.py
+(1) Finish fig5.py
   * solve training issue for rnn-odes for interpolation
   * More epochs for training figure
   - Prettify figures, get the right fonts, make sure axes are right size, whatever.
-(3) merge crossbar/crossbar_viability.py into crossbar/crossbar.py and test
-(4) Write fig6.py models and outputs
+(2) Write fig6.py models and outputs
   * Spiral datasets
   * caption
   * noise plots
-(5) Actual science questions
+(3) Actual science questions
   * effects of different solvers
   * Variability impact on node vs convential
   * Figure out what NODE-RNNs are used for in the original paper, some kind of gaussian mixture model.
   - energy efficiency
   - effect of time mesh size
   * Characterize data movement
-(5) write more networks with crossbar integration
+(4) write more networks with crossbar integration
   - Convolutions
   - Avg Pooling
   - More ODE Solvers
-(6) Improve crossbar circuit solver
+(5) Improve crossbar circuit solver
   * Mapping for addition on the crossbar (may be involved due to scaling)
   - Write auto magic scaling number tuning routine
   - fit memristor data to VTEAM model, get parameters
@@ -33,10 +31,10 @@ As can be seen, there is a lot to do. * indicates important. Some of these thing
   - General prettification, move stuff into different files
   - improve neanderthal inverse hash on inverse matrices
   - Parallelize stuff (tiles inputs can be multiplied by inverses in parallel, GPU support, etc.)
-(7) Documentation
+(6) Documentation
   - Explain how mapping works, how it can be implemented into C code
   - General docs stuff
-(8) Repository
+(7) Repository
   - use git issues instead of these notes lol
   - put in adjoint method code from forever ago
   - put in old solvers, etc.
