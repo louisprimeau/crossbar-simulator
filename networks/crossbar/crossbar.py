@@ -7,6 +7,15 @@ July 29th 2020
 Last updated: March 18th 2021
 """
 
+"""
+Circuit Solver taken from:
+
+A Comprehensive Crossbar Array Model With Solutions for Line Resistance and Nonlinear Device Characteristics
+An Chen
+IEEE TRANSACTIONS ON ELECTRON DEVICES, VOL. 60, NO. 4, APRIL 2013
+"""
+
+
 import torch
 import numpy as np
 import itertools
@@ -53,8 +62,8 @@ class crossbar:
                                              for i in range(self.size[0])],dim=0)
     
         elif self.method == "viability":
-            self.g_on = (1 / device_params["r_on"]) * torch.ones(self.size)        
-            self.g_off = (1 / device_params["r_off"]) * torch.ones(self.size)
+            self.g_on = 1 / torch.normal(device_params["r_on"], device_params["r_on_stddev"], size=self.size)
+            self.g_off = 1 / torch.normal(device_params["r_off"], device_params["r_off_stddev"], size=self.size)
             self.viability = device_params["viability"]
             
         else:
@@ -75,6 +84,17 @@ class crossbar:
         # Resistance of CMOS lines
         self.r_cmos_line = device_params["r_cmos_line"]
 
+        # WL & BL resistances
+        self.g_s_wl_in = torch.ones(self.tile_rows) * 1
+        self.g_s_wl_out = torch.ones(self.tile_rows) * 1e-9
+        self.g_s_bl_in = torch.ones(self.tile_rows) * 1e-9
+        self.g_s_bl_out = torch.ones(self.tile_rows) * 1
+
+        # WL & BL voltages that are not the signal
+        self.v_bl_in = torch.zeros(self.size[1])
+        self.v_bl_out = torch.ones(self.size[1])
+        self.v_wl_out = torch.zeros(self.size[0])
+        
         # Conductance Matrix; initialize each memristor at the on resstance
         self.W = torch.ones(self.size) * self.g_on
 
@@ -86,17 +106,7 @@ class crossbar:
         self.mapped = []
         self.tensors = [] #original data of all mapped weights
         self.saved_tiles = {}
-        
-    def apply_stuck(self, p_stuck_on, p_stuck_off):
-
-        state_dist = torch.distributions.categorical.Categorical(probs=torch.Tensor([p_stuck_on, p_stuck_off, 1 - p_stuck_on - p_stuck_off]))
-        state_mask = state_dist.sample(self.size)
-
-        self.W[state_mask == 0] = self.g_off[state_mask==0]
-        self.W[state_mask == 1] = self.g_on[state_mask==1]
-        
-        return None
-
+    
     # Maps an already scaled matrix to differential weights
     def map(self, matrix):
         assert not(matrix.size(0) > self.size[0] or matrix.size(1)*2 > self.size[1]), "input too large"
@@ -123,98 +133,70 @@ class crossbar:
         output = torch.zeros((voltage.size(1), self.size[1]))
         for i in range(self.size[0] // self.tile_rows):
             for j in range(self.size[1] // self.tile_cols):
-                for k in range(voltage.size(1)):
-
-                    coords = (i*self.tile_rows, (i+1)*self.tile_rows, j*self.tile_cols, (j+1)*self.tile_rows)
-                    vect = voltage[i*self.tile_rows:(i+1)*self.tile_rows,k]
-                    solution = self.circuit_solve(coords, vect, torch.zeros(self.size[1]), torch.ones(self.size[1]), torch.zeros(self.size[0]))
-                    output[k] += torch.cat((torch.zeros(j*self.tile_cols), solution, torch.zeros((self.size[1] // self.tile_cols - j - 1) * self.tile_cols)))
-                    
+                coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
+                vect = voltage[i*self.tile_rows:(i+1)*self.tile_rows,:]
+                solution = self.batch_solve(coords, vect)
+                output += torch.cat((torch.zeros(voltage.size(1), j*self.tile_cols), solution, torch.zeros((voltage.size(1), (self.size[1] // self.tile_cols - j - 1)*self.tile_cols))), axis=1)
         return output
     
+    def batch_solve(self, coords, vectors):
+        if str(coords) not in self.saved_tiles.keys(): M = self.make_M(coords) # Lazy hash
+        else: M = self.saved_tiles[str(coords)]
+        Es = torch.cat(tuple(self.make_E(vectors[:, i]).view(-1,1) for i in range(vectors.size(1))), axis=1)
+        V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
+        I = torch.sum(V * self.W[coords], axis=1)
+        return I
 
-    """
-    A Comprehensive Crossbar Array Model With Solutions for Line Resistance and Nonlinear Device Characteristics
-    An Chen
-    IEEE TRANSACTIONS ON ELECTRON DEVICES, VOL. 60, NO. 4, APRIL 2013
-    """
-    
-    def hash_M(self, a, b, c, d):
-        return str(a) + "_" + str(b) + "_" + str(c) + "_" + str(d)
-
-    def make_M(self, a, b, c, d):
-        
-        g = self.W[a:b,c:d]
-        g_wl, g_bl = self.g_wl, self.g_bl
-        g_s_wl_in, g_s_wl_out = torch.ones(self.tile_rows) * 1, torch.ones(self.tile_rows) * 1e-9
-        g_s_bl_in, g_s_bl_out = torch.ones(self.tile_rows) * 1e-9, torch.ones(self.tile_rows) * 1
+    def make_E(self, v_wl_in):
         m, n = self.tile_rows, self.tile_cols
-        
-        A = torch.block_diag(*tuple(torch.diag(g[i,:])
-                          + torch.diag(torch.cat((g_wl, g_wl * 2 * torch.ones(n-2), g_wl)))
-                          + torch.diag(g_wl * -1 *torch.ones(n-1), diagonal = 1)
-                          + torch.diag(g_wl * -1 *torch.ones(n-1), diagonal = -1)
-                          + torch.diag(torch.cat((g_s_wl_in[i].view(1), torch.zeros(n - 2), g_s_wl_out[i].view(1))))
-                                   for i in range(m)))
+        E = torch.cat([torch.cat(((v_wl_in[i]*self.g_s_wl_in[i]).view(1), torch.zeros(n-2), (self.v_wl_out[i]*self.g_s_wl_out[i]).view(1))) for i in range(m)] +
+                      [torch.cat(((-self.v_bl_in[i]*self.g_s_bl_in[i]).view(1), torch.zeros(m-2),(-self.v_bl_in[i]*self.g_s_bl_out[i]).view(1))) for i in range(n)]).view(-1, 1)
+        return E
 
-        B = torch.block_diag(*tuple(-torch.diag(g[i,:]) for i in range(m)))
+    def make_M(self, coords):
         
+        g = self.W[coords]
+        m, n = self.tile_rows, self.tile_cols
+
         def makec(j):
             c = torch.zeros(m, m*n)
             for i in range(m):
-                c[i,n*(i) + j] = g[i,j] # j or j-1 ????? fix this later
+                c[i,n*(i) + j] = g[i,j]
             return c
   
-        C = torch.cat([makec(j) for j in range(n)],dim=0)
-        
         def maked(j):
             d = torch.zeros(m, m*n)
             
             i = 0
-            d[i, j] = -g_s_bl_in[j] - g_bl - g[i, j]
-            d[i, n*(i+1) + j] = g_bl
+            d[i, j] = -self.g_s_bl_in[j] - self.g_bl - g[i, j]
+            d[i, n*(i+1) + j] = self.g_bl
 
             for i in range(1, m):
-                d[i, n*(i-1) + j] = g_bl
-                d[i, n*i + j] = -g_bl - g[i,j] - g_bl
-                d[i,j] = g_bl
+                d[i, n*(i-1) + j] = self.g_bl
+                d[i, n*i + j] = -self.g_bl - g[i,j] - self.g_bl
+                d[i,j] = self.g_bl
                    
             i = m - 1
-            d[i, n*(i-1) + j] = g_bl
-            d[i, n*i + j] = -g_s_bl_out[j] - g[i,j] - g_bl
+            d[i, n*(i-1) + j] = self.g_bl
+            d[i, n*i + j] = -self.g_s_bl_out[j] - g[i,j] - self.g_bl
                 
             return d
 
+        
+        A = torch.block_diag(*tuple(torch.diag(g[i,:])
+                          + torch.diag(torch.cat((self.g_wl, self.g_wl * 2 * torch.ones(n-2), self.g_wl)))
+                          + torch.diag(self.g_wl * -1 *torch.ones(n-1), diagonal = 1)
+                          + torch.diag(self.g_wl * -1 *torch.ones(n-1), diagonal = -1)
+                          + torch.diag(torch.cat((self.g_s_wl_in[i].view(1), torch.zeros(n - 2), self.g_s_wl_out[i].view(1))))
+                                   for i in range(m)))
+        B = torch.block_diag(*tuple(-torch.diag(g[i,:]) for i in range(m)))
+        C = torch.cat([makec(j) for j in range(n)],dim=0)
         D = torch.cat([maked(j) for j in range(0,n)], dim=0)
         M = torch.inverse(torch.cat((torch.cat((A,B),dim=1), torch.cat((C,D),dim=1)), dim=0))
 
-        self.saved_tiles[self.hash_M(a,b,c,d)] = M
+        self.saved_tiles[str(coords)] = M
+
         return M
-
-    def circuit_solve(self, coords,  v_wl_in, v_bl_in, v_bl_out, v_wl_out):
-        
-        g_wl, g_bl = self.g_wl, self.g_bl
-        g_s_wl_in, g_s_wl_out = torch.ones(self.tile_rows) * 1, torch.ones(self.tile_rows) * 1e-9 # 1 ohm word line input resistance, 1Gohm output resistance.
-        g_s_bl_in, g_s_bl_out = torch.ones(self.tile_rows) * 1e-9, torch.ones(self.tile_rows) * 1
-        m, n = self.tile_rows, self.tile_cols
-        
-        if self.hash_M(*coords) not in self.saved_tiles.keys():
-            M = self.make_M(*coords)
-        else:
-            M = self.saved_tiles[self.hash_M(*coords)]
-        
-        E = torch.cat([torch.cat(((v_wl_in[i]*g_s_wl_in[i]).view(1), #EW
-                                  torch.zeros(n-2),
-                                  (v_wl_out[i]*g_s_wl_out[i]).view(1)))
-                                 for i in range(m)] +
-                      [torch.cat(((-v_bl_in[i]*g_s_bl_in[i]).view(1), #EB
-                                  torch.zeros(m-2),
-                                  (-v_bl_in[i]*g_s_bl_out[i]).view(1)))
-                                 for i in range(n)]
-        ).view(-1, 1)
-
-        V = torch.chunk(torch.matmul(M, E), 2) #chunk splits into wl and bl voltages, subtracted down below.
-        return torch.sum((V[1] - V[0]).view(m,n)*self.W[coords[0]:coords[1],coords[2]:coords[3]],dim=0)
 
     def register_linear(self, matrix, bias=None):
 
@@ -244,7 +226,6 @@ class crossbar:
                    midpoint = (self.g_on[i,j] - self.g_off[i,j]) / 2 + self.g_off[i,j]
                    right_state = midpoint + scaled_matrix[i-row,j-col] / 2
                    left_state = midpoint - scaled_matrix[i-row,j-col] / 2
-                   
                    self.W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0,std=right_state*self.viability), i, 2*j+1)
                    self.W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j)
                 
@@ -257,7 +238,17 @@ class crossbar:
             return self.g_on[i,j]
         else:
             return self.g_off[i,j]
+
+    def apply_stuck(self, p_stuck_on, p_stuck_off):
+
+        state_dist = torch.distributions.categorical.Categorical(probs=torch.Tensor([p_stuck_on, p_stuck_off, 1 - p_stuck_on - p_stuck_off]))
+        state_mask = state_dist.sample(self.size)
+
+        self.W[state_mask == 0] = self.g_off[state_mask==0]
+        self.W[state_mask == 1] = self.g_on[state_mask==1]
         
+        return None
+
     def which_tiles(self, row, col, m_row, m_col):
         return itertools.product(range(row // self.tile_rows, (row + m_row) // self.tile_rows + 1),
                                  range(col // self.tile_cols,(col + m_col) // self.tile_cols + 1),
@@ -283,6 +274,7 @@ class ticket:
         self.crossbar = crossbar
         self.mat_scale_factor = mat_scale_factor
         self.matrix = matrix
+
     def prep_vector(self, vector, v_bits):
 
         # Scale vector to [0, 2^v_bits]
@@ -344,7 +336,9 @@ device_params = {"Vdd": 1.8,
                  "tile_rows": 4,
                  "tile_cols": 4,
                  "r_cmos_line": 600,
-                 "r_cmos_transistor": 20, 
+                 "r_cmos_transistor": 20,
+                 "r_on_stddev": 1e3,
+                 "r_off_stddev": 1e4,
                  "p_stuck_on": 0.01,
                  "p_stuck_off": 0.01,
                  "method": "viability",

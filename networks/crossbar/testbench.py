@@ -3,13 +3,17 @@
 
 
 import torch
-import crossbar_viability as crossbar
+import crossbar
+import numpy as np
+import random
+import os
+import time
 
 # This testbench tries out a 100 matrices and vectors to multiply.
 
 device_params = {"Vdd": 0.2,
-                 "r_wl": 20,
-                 "r_bl": 20,
+                 "r_wl": 20.0,
+                 "r_bl": 20.0,
                  "m": 32,
                  "n": 32,
                  "r_on": 1e4,
@@ -21,32 +25,46 @@ device_params = {"Vdd": 0.2,
                  "tile_cols": 8,
                  "r_cmos_line": 600,
                  "r_cmos_transistor": 20,
-                 "p_stuck_on": 0.0,
-                 "p_stuck_off": 0.0,
-                 "method": 'viability',
-                 "viability": 0.0,
+                 "r_on_stddev": 1e3,
+                 "r_off_stddev": 1e4,
+                 "p_stuck_on": 0.01,
+                 "p_stuck_off": 0.01,
+                 "method": "viability",
+                 "viability": 0.05,
 }
 
 cb = crossbar.crossbar(device_params)
 
-torch.manual_seed(2)
-
-torch.backends.cudnn.deterministic=True
+seed = 12
+random.seed(seed)
+os.environ['PYTHONHASHSEED'] = str(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
 
 max_rows = device_params["m"] // 2
 max_cols = device_params["n"]
 
-test_num = 20
+test_num = 100
 
-matrices = [torch.randint(-20, 20, (max_rows, max_cols)) for _ in range(test_num)]
-vectors = [torch.randint(-20, 20, (max_cols, 1)) for _ in range(test_num)]
+matrices = [torch.randint(-10, 10, (max_rows, max_cols)) for _ in range(test_num)]
+vectors = [torch.randint(-10, 10, (max_cols, 1)) for _ in range(test_num)]
 
+
+cb_time, t_time, error = 0.0, 0.0, 0.0
 for matrix, vector in zip(matrices, vectors):
-
-
-    
     cb.clear()
     ticket = cb.register_linear(torch.transpose(matrix,0,1))
+
+    start_time = time.time()
     output = ticket.vmm(vector, v_bits=4)
+    cb_time += time.time() - start_time
+
+    start_time = time.time()
     target = matrix.matmul(vector)
-    print(torch.norm(target - output) / torch.norm(matrix.double()))
+    t_time += time.time() - start_time
+
+    error += torch.norm(target - output) / torch.norm(matrix.double())
+
+print("Average crossbar vmm time:", cb_time / test_num, "s")
+print("Average torch vmm time:", t_time / test_num, "s")
+print("Average relative error:", error / test_num)

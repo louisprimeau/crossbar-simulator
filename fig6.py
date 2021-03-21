@@ -69,7 +69,7 @@ for i in range(1):
     model = rnn_ode.RNN_ODE(2, 6, 2, device_params, time_steps)
     losses = train.train(train_data, model, epochs)
     # model.node_rnn.observe(True)
-    # model.use_cb(True)
+    model.use_cb(True)
     output, times = train.test(test_start[0][0], test_start[0][1], num_predict, model)
     # model.use_cb(False)
 
