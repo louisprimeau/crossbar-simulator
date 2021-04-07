@@ -1,7 +1,3 @@
-
-
-
-
 import torch
 import crossbar
 import numpy as np
@@ -44,11 +40,10 @@ torch.manual_seed(seed)
 max_rows = device_params["m"] // 2
 max_cols = device_params["n"]
 
-test_num = 100
+test_num = 5
 
 matrices = [torch.randint(-10, 10, (max_rows, max_cols)) for _ in range(test_num)]
 vectors = [torch.randint(-10, 10, (max_cols, 1)) for _ in range(test_num)]
-
 
 cb_time, t_time, error = 0.0, 0.0, 0.0
 for matrix, vector in zip(matrices, vectors):
@@ -64,7 +59,7 @@ for matrix, vector in zip(matrices, vectors):
     t_time += time.time() - start_time
 
     error += torch.norm(target - output) / torch.norm(matrix.double())
-
+#current_history = torch.cat(current_history, axis=1)
 print("Average crossbar vmm time:", cb_time / test_num, "s")
 print("Average torch vmm time:", t_time / test_num, "s")
 print("Average relative error:", error / test_num)

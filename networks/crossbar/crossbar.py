@@ -1,10 +1,10 @@
 """
-crossbary.py
+crossbar.py
 Louis Primeau
 University of Toronto Department of Electrical and Computer Engineering
 louis.primeau@mail.utoronto.ca
 July 29th 2020
-Last updated: March 18th 2021
+Last updated: March 21st 2021
 """
 
 """
@@ -14,7 +14,6 @@ A Comprehensive Crossbar Array Model With Solutions for Line Resistance and Nonl
 An Chen
 IEEE TRANSACTIONS ON ELECTRON DEVICES, VOL. 60, NO. 4, APRIL 2013
 """
-
 
 import torch
 import numpy as np
@@ -106,7 +105,8 @@ class crossbar:
         self.mapped = []
         self.tensors = [] #original data of all mapped weights
         self.saved_tiles = {}
-    
+        self.current_history = []
+        
     # Maps an already scaled matrix to differential weights
     def map(self, matrix):
         assert not(matrix.size(0) > self.size[0] or matrix.size(1)*2 > self.size[1]), "input too large"
@@ -137,6 +137,7 @@ class crossbar:
                 vect = voltage[i*self.tile_rows:(i+1)*self.tile_rows,:]
                 solution = self.batch_solve(coords, vect)
                 output += torch.cat((torch.zeros(voltage.size(1), j*self.tile_cols), solution, torch.zeros((voltage.size(1), (self.size[1] // self.tile_cols - j - 1)*self.tile_cols))), axis=1)
+        self.current_history.append(output)
         return output
     
     def batch_solve(self, coords, vectors):
@@ -170,7 +171,7 @@ class crossbar:
             i = 0
             d[i, j] = -self.g_s_bl_in[j] - self.g_bl - g[i, j]
             d[i, n*(i+1) + j] = self.g_bl
-
+            
             for i in range(1, m):
                 d[i, n*(i-1) + j] = self.g_bl
                 d[i, n*i + j] = -self.g_bl - g[i,j] - self.g_bl
@@ -274,7 +275,8 @@ class ticket:
         self.crossbar = crossbar
         self.mat_scale_factor = mat_scale_factor
         self.matrix = matrix
-
+        
+        
     def prep_vector(self, vector, v_bits):
 
         # Scale vector to [0, 2^v_bits]
@@ -291,8 +293,7 @@ class ticket:
         bit_vector *= self.crossbar.V
 
         # Pad bit vector with unselected voltages
-        pad_vector = torch.zeros(self.crossbar.size[0], v_bits)
-        
+        pad_vector = torch.zeros(self.crossbar.size[0], v_bits)        
         pad_vector[self.row:self.row + self.m_rows,:] = bit_vector
 
         return pad_vector, vect_scale_factor, vect_min
