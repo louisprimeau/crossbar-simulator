@@ -42,9 +42,11 @@ class net(torch.nn.Module):
         super(net, self).__init__()
         self.conv = Conv.Conv(3, 1, 3, cb)
         self.linear = Linear.Linear(8*8*3, 10, cb)
-        self.softmax = torch.nn.Softmax()
+        self.softmax = torch.nn.Softmax(dim=0)
     def forward(self, x):
-        return self.softmax(self.linear(self.conv(x).reshape(-1,1)).view(-1))
+        return self.linear(self.conv(x).reshape(-1,1)).reshape(-1)
     
 test_network = net()
+test_network.conv.use_cb(True)
+test_network.linear.use_cb(True)
 print(test_network(trainset[0][0].unsqueeze(0)))

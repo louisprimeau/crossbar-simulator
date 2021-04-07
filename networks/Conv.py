@@ -13,9 +13,8 @@ class Conv(torch.nn.Module):
 
         print(output_size, input_size * kernel_size**2)
         self.kernel = Linear.Linear(self.input_size * kernel_size**2, output_size, cb)
-        print(self.kernel.W.size())
         self.nonlinear = torch.nn.ReLU()
-
+        
     # Torch does N, C, H, W
     def forward(self, inp):
         batches = []
@@ -36,3 +35,5 @@ class Conv(torch.nn.Module):
     def remap(self):
         self.kernel.remap()
 
+    def use_cb(self, state):
+        self.kernel.cbon = state
