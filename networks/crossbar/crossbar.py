@@ -206,7 +206,7 @@ class crossbar:
         # Need to add checks for bias size and col size
         
         # Scale matrix                            
-
+        
         if (self.method == "linear"):                
             mat_scale_factor = torch.max(torch.abs(matrix)) / torch.max(self.g_on) * 2
             scaled_matrix = matrix / mat_scale_factor
@@ -220,6 +220,8 @@ class crossbar:
                     self.W[i,2*j] = self.conductance_states[i,j,midpoint-(idx-midpoint)]
                     
         elif (self.method == "viability"):
+            print(matrix.size())
+            print(row + matrix.size(0), col + matrix.size(1))
             mat_scale_factor = torch.max(torch.abs(matrix)) / (torch.max(self.g_on) - torch.min(self.g_off)) * 2
             scaled_matrix = matrix / mat_scale_factor
             for i in range(row, row + scaled_matrix.size(0)):
@@ -378,4 +380,5 @@ def print_mapping(tensors, mapping, crossbar_size):
     values = cb[torch.nonzero(cb, as_tuple=True)].tolist()
     for val in zip(rows,cols,values):
         print(val[0], val[1], val[2], sep=", ")
+
 

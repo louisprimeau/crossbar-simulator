@@ -22,15 +22,16 @@ class Conv(torch.nn.Module):
         for x in inp:
             x = x.unsqueeze(0) # So the tensors are still rank 4
             pd = self.kernel_size // 2 if self.padding else zero
-            padded = torch.nn.functional.pad(x, (0, 0, pd, pd, pd, pd), mode='constant')
+            padded = torch.nn.functional.pad(x, (pd, pd, pd, pd, 0, 0, 0, 0), mode='constant')
             rows = []
-            for i in range(pd, x.size(0) + pd):
+            for i in range(pd, x.size(2) + pd):
                 cols = []
-                for j in range(pd, x.size(0) + pd):
-                    cols.append(self.kernel(padded[:, :, i-1:i+2, j-1:j+2].reshape(-1)).reshape(-1,1,1))
-                rows.append(torch.cat(cols, axis=2))
-            batches.append(torch.cat(rows, axis=0))
-        return self.nonlinear(torch.cat(batches)
+                for j in range(pd, x.size(3) + pd):
+                    cols.append(self.kernel(padded[:, :, i-1:i+2, j-1:j+2].reshape(-1, 1)).reshape(1,-1,1,1))
+                rows.append(torch.cat(cols, axis=3))
+            batches.append(torch.cat(rows, axis=2))
+        output = torch.cat(batches, axis=0)
+        return self.nonlinear(output)
     
     def remap(self):
         self.kernel.remap()
