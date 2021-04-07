@@ -15,17 +15,22 @@ class Conv(torch.nn.Module):
         self.kernel = Linear.Linear(self.input_size * kernel_size**2, output_size, cb)
         print(self.kernel.W.size())
         self.nonlinear = torch.nn.ReLU()
-        
-    def forward(self, x):
-        pd = self.kernel_size // 2 if self.padding else zero
-        padded = torch.nn.functional.pad(x, (0, 0, pd, pd, pd, pd), mode='constant')
-        rows = []
-        for i in range(pd, x.size(0) + pd):
-            cols = []
-            for j in range(pd, x.size(0) + pd):
-                cols.append(self.kernel(padded[i-1:i+2, j-1:j+2, :].reshape(-1)).reshape(1,1,-1))
-            rows.append(torch.cat(cols, axis=1))
-        return self.nonlinear(torch.cat(rows, axis=0))
+
+    # Torch does N, C, H, W
+    def forward(self, inp):
+        batches = []
+        for x in inp:
+            x = x.unsqueeze(0) # So the tensors are still rank 4
+            pd = self.kernel_size // 2 if self.padding else zero
+            padded = torch.nn.functional.pad(x, (0, 0, pd, pd, pd, pd), mode='constant')
+            rows = []
+            for i in range(pd, x.size(0) + pd):
+                cols = []
+                for j in range(pd, x.size(0) + pd):
+                    cols.append(self.kernel(padded[:, :, i-1:i+2, j-1:j+2].reshape(-1)).reshape(-1,1,1))
+                rows.append(torch.cat(cols, axis=2))
+            batches.append(torch.cat(rows, axis=0))
+        return self.nonlinear(torch.cat(batches)
     
     def remap(self):
         self.kernel.remap()
