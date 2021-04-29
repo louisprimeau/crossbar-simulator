@@ -100,7 +100,9 @@ class crossbar:
         # Stuck-on & stuck-on device nonideality 
         self.p_stuck_on = device_params["p_stuck_on"]
         self.p_stuck_off = device_params["p_stuck_off"]
-        self.devicefaults = False
+        
+        state_dist = torch.distributions.categorical.Categorical(probs=torch.Tensor([self.p_stuck_on, self.p_stuck_off, 1 - self.p_stuck_on - self.p_stuck_off]))
+        self.state_mask = state_dist.sample(self.size)
 
         self.mapped = []
         self.tensors = [] #original data of all mapped weights
@@ -229,7 +231,9 @@ class crossbar:
                    left_state = midpoint - scaled_matrix[i-row,j-col] / 2
                    self.W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0,std=right_state*self.viability), i, 2*j+1)
                    self.W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j)
-                
+
+        self.apply_stuck()
+        
         return ticket(row, col, matrix.size(0), matrix.size(1), matrix, mat_scale_factor, self)
     
     def clip(self, tensor, i, j):
@@ -240,14 +244,9 @@ class crossbar:
         else:
             return self.g_off[i,j]
 
-    def apply_stuck(self, p_stuck_on, p_stuck_off):
-
-        state_dist = torch.distributions.categorical.Categorical(probs=torch.Tensor([p_stuck_on, p_stuck_off, 1 - p_stuck_on - p_stuck_off]))
-        state_mask = state_dist.sample(self.size)
-
-        self.W[state_mask == 0] = self.g_off[state_mask==0]
-        self.W[state_mask == 1] = self.g_on[state_mask==1]
-        
+    def apply_stuck(self):
+        self.W[self.state_mask == 0] = self.g_off[self.state_mask==0]
+        self.W[self.state_mask == 1] = self.g_on[self.state_mask==1]
         return None
 
     def which_tiles(self, row, col, m_row, m_col):
@@ -256,10 +255,18 @@ class crossbar:
         )
 
     def find_space(self, m_row, m_col):
+
+        # Format is (*indexes of top left corner, *indexes of bottom right corner + 1 (it's zero indexed))
         if not self.mapped:
             self.mapped.append((0,0,m_row,m_col))
         else:
-            self.mapped.append((self.mapped[-1][0] + self.mapped[-1][2], self.mapped[-1][1] + self.mapped[-1][3], m_row, m_col))
+            if self.mapped[-1][3] + m_col < self.size[1]:
+                self.mapped.append((self.mapped[-1][0], self.mapped[-1][3], m_row, m_col))
+            else:
+                self.mapped.append((self.mapped[-1][2], 0, m_row, m_col))
+                
+        #self.mapped.append((self.mapped[-1][0] + self.mapped[-1][2], self.mapped[-1][1] + self.mapped[-1][3], m_row, m_col))
+        print(self.mapped[-1])
         return self.mapped[-1][0], self.mapped[-1][1] 
     
     def clear(self):
