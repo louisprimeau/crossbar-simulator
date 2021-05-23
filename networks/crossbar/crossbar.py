@@ -19,17 +19,8 @@ import torch
 import numpy as np
 import itertools
 import time
-# Implements scipy's minmax scaler except just between 0 and 1 for torch Tensors.
-# Taken from a ptrblck post on the PyTorch forums. Love that dude.
-class MinMaxScaler(object):
-    def __call__(self, tensor):
-        self.scale = 1.0 / (tensor.max(dim=1, keepdim=True)[0] - tensor.min(dim=1, keepdim=True)[0])
-        self.min = tensor.min(dim=1, keepdim=True)[0]
-        tensor.sub_(self.min).mul_(self.scale)
-        return tensor
-    def inverse_transform(self, tensor):
-        tensor.div_(self.scale).add_(self.min)
-        return tensor
+
+from ticket import ticket
 
 class crossbar:
     def __init__(self, device_params):
@@ -51,6 +42,10 @@ class crossbar:
 
         # Crossbar conductance model
         self.method = device_params["method"]
+
+        # Device Programming Error approximation
+        # 'linear' programming assumes that there is are 2^resolution states between the on and off resistances of the device.
+        # Any number programmed onto the crossbar is rounded to one of those states.
         if (self.method == "linear"):
             self.g_on = 1 / torch.normal(device_params["r_on"], device_params["r_on_stddev"], size=self.size)
             self.g_off = 1 / torch.normal(device_params["r_off"], device_params["r_off_stddev"], size=self.size)
@@ -59,7 +54,9 @@ class crossbar:
             self.conductance_states = torch.cat([torch.cat([torch.linspace(self.g_off[i,j], self.g_on[i,j],2**self.resolution - 1).unsqueeze(0)
                                                         for j in range(self.size[1])],dim=0).unsqueeze(0)
                                              for i in range(self.size[0])],dim=0)
-    
+
+        # 'viability' assumes ideal programming to any conductance but the end result is perturbed by gaussian noise with spread
+        # equal to some percentage (the "viability") of the conductance. 
         elif self.method == "viability":
             self.g_on = 1 / torch.normal(device_params["r_on"], device_params["r_on_stddev"], size=self.size)
             self.g_off = 1 / torch.normal(device_params["r_off"], device_params["r_off_stddev"], size=self.size)
@@ -67,7 +64,8 @@ class crossbar:
             
         else:
             raise ValueError("device_params['method'] must be \"linear\" or \"viability\"")
-        
+
+        # conductance of the word and bit lines. 
         self.g_wl = torch.Tensor((1 / device_params["r_wl"],))
         self.g_bl = torch.Tensor((1 / device_params["r_bl"],))
                 
@@ -80,7 +78,7 @@ class crossbar:
         assert self.size[0] % self.tile_rows == 0, "tile size does not divide crossbar size in row direction"
         assert self.size[1] % self.tile_cols == 0, "tile size does not divide crossbar size in col direction"
         
-        # Resistance of CMOS lines
+        # Resistance of CMOS lines (NOT IMPLEMENTED)
         self.r_cmos_line = device_params["r_cmos_line"]
 
         # WL & BL resistances
@@ -89,7 +87,7 @@ class crossbar:
         self.g_s_bl_in = torch.ones(self.tile_rows) * 1e-9
         self.g_s_bl_out = torch.ones(self.tile_rows) * 1
 
-        # WL & BL voltages that are not the signal
+        # WL & BL voltages that are not the signal, assume bl_in, wl_out are tied low and bl_out is tied to 1 V. 
         self.v_bl_in = torch.zeros(self.size[1])
         self.v_bl_out = torch.ones(self.size[1])
         self.v_wl_out = torch.zeros(self.size[0])
@@ -100,49 +98,30 @@ class crossbar:
         # Stuck-on & stuck-on device nonideality 
         self.p_stuck_on = device_params["p_stuck_on"]
         self.p_stuck_off = device_params["p_stuck_off"]
-        
         state_dist = torch.distributions.categorical.Categorical(probs=torch.Tensor([self.p_stuck_on, self.p_stuck_off, 1 - self.p_stuck_on - self.p_stuck_off]))
         self.state_mask = state_dist.sample(self.size)
 
+        # Storage for all mapped tensors and their positions. Used to get data off the crossbar after simulation. 
         self.mapped = []
         self.tensors = [] #original data of all mapped weights
         self.saved_tiles = {}
         self.current_history = []
-        
-    # Maps an already scaled matrix to differential weights
-    def map(self, matrix):
-        assert not(matrix.size(0) > self.size[0] or matrix.size(1)*2 > self.size[1]), "input too large"
 
-        if (self.method == "linear"):
-            midpoint = self.conductance_states.size(2) // 2
-            for i in range(matrix.size(0)):
-                for j in range(matrix.size(1)):
-                    shifted = self.conductance_states[i,j] - self.conductance_states[i,j,midpoint]
-                    idx = torch.min(torch.abs(shifted - matrix[i,j]), dim=0)[1]    
-                    self.W[i,2*j+1] = self.conductance_states[i,j,idx]
-                    self.W[i,2*j] = self.conductance_states[i,j,midpoint-(idx-midpoint)]
-
-        elif (self.method == "viability"):
-             midpoint = (g_on[i,j] - g_off[i,j]) / 2 + g_off[i,j]
-             for i in range(matrix.size(0)):
-                for j in range(matrix.size(1)):
-                    high_state = midpoint + matrix[i,j] / 2
-                    low_state = midpoint - matrix[i,j] / 2
-                    self.W[i,2*j+1] = self.window(high_state + torch.normal(mean=0,std=high_state*self.viability))
-                    self.W[i,2*j] = self.window(low_state + torch.normal(mean=0,std=low_state*self.viability))
-
+    
+    # Iterates through the tiles and solves each and then adds their outputs together. 
     def solve(self, voltage):
         output = torch.zeros((voltage.size(1), self.size[1]))
         for i in range(self.size[0] // self.tile_rows):
             for j in range(self.size[1] // self.tile_cols):
                 coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
                 vect = voltage[i*self.tile_rows:(i+1)*self.tile_rows,:]
-                solution = self.batch_solve(coords, vect)
+                solution = self.tile_solve(coords, vect)
                 output += torch.cat((torch.zeros(voltage.size(1), j*self.tile_cols), solution, torch.zeros((voltage.size(1), (self.size[1] // self.tile_cols - j - 1)*self.tile_cols))), axis=1)
         self.current_history.append(output)
         return output
-    
-    def batch_solve(self, coords, vectors):
+
+    # solves a specific tile. 
+    def tile_solve(self, coords, vectors):
         if str(coords) not in self.saved_tiles.keys(): M = self.make_M(coords) # Lazy hash
         else: M = self.saved_tiles[str(coords)]
         Es = torch.cat(tuple(self.make_E(vectors[:, i]).view(-1,1) for i in range(vectors.size(1))), axis=1)
@@ -150,12 +129,14 @@ class crossbar:
         I = torch.sum(V * self.W[coords], axis=1)
         return I
 
+    # Constructs the E matrix in MV = E.
     def make_E(self, v_wl_in):
         m, n = self.tile_rows, self.tile_cols
         E = torch.cat([torch.cat(((v_wl_in[i]*self.g_s_wl_in[i]).view(1), torch.zeros(n-2), (self.v_wl_out[i]*self.g_s_wl_out[i]).view(1))) for i in range(m)] +
                       [torch.cat(((-self.v_bl_in[i]*self.g_s_bl_in[i]).view(1), torch.zeros(m-2),(-self.v_bl_in[i]*self.g_s_bl_out[i]).view(1))) for i in range(n)]).view(-1, 1)
         return E
 
+    # Constructs the M matrix in MV = E. 
     def make_M(self, coords):
         
         g = self.W[coords]
@@ -184,7 +165,6 @@ class crossbar:
             d[i, n*i + j] = -self.g_s_bl_out[j] - g[i,j] - self.g_bl
                 
             return d
-
         
         A = torch.block_diag(*tuple(torch.diag(g[i,:])
                           + torch.diag(torch.cat((self.g_wl, self.g_wl * 2 * torch.ones(n-2), self.g_wl)))
@@ -201,6 +181,7 @@ class crossbar:
 
         return M
 
+    # Handles programming for the crossbar instance. 
     def register_linear(self, matrix, bias=None):
 
         self.tensors.append(matrix)
@@ -208,7 +189,6 @@ class crossbar:
         # Need to add checks for bias size and col size
         
         # Scale matrix                            
-        
         if (self.method == "linear"):                
             mat_scale_factor = torch.max(torch.abs(matrix)) / torch.max(self.g_on) * 2
             scaled_matrix = matrix / mat_scale_factor
@@ -243,11 +223,10 @@ class crossbar:
             return self.g_on[i,j]
         else:
             return self.g_off[i,j]
-
+    
     def apply_stuck(self):
         self.W[self.state_mask == 0] = self.g_off[self.state_mask==0]
         self.W[self.state_mask == 1] = self.g_on[self.state_mask==1]
-        return None
 
     def which_tiles(self, row, col, m_row, m_col):
         return itertools.product(range(row // self.tile_rows, (row + m_row) // self.tile_rows + 1),
@@ -256,17 +235,22 @@ class crossbar:
 
     def find_space(self, m_row, m_col):
 
+        if m_row > self.size[0] or m_col*2 > self.size[1]:
+                raise ValueError("Matrix with size ({}, {}) is too large for crossbar of size ({}, {})".format(m_row, m_col, self.size[0], self.size[1]))
+            
         # Format is (*indexes of top left corner, *indexes of bottom right corner + 1 (it's zero indexed))
         if not self.mapped:
+            
             self.mapped.append((0,0,m_row,m_col))
         else:
             if self.mapped[-1][3] + m_col < self.size[1]:
                 self.mapped.append((self.mapped[-1][0], self.mapped[-1][3], m_row, m_col))
             else:
+                if m_col > (self.size[0] - self.mapped[-1][2]):
+                    raise ValueError("Matrix with {} rows does not fit on crossbar with {} free rows".format(m_col, self.size[0] - self.mapped[-1][2]))    
                 self.mapped.append((self.mapped[-1][2], 0, m_row, m_col))
                 
         #self.mapped.append((self.mapped[-1][0] + self.mapped[-1][2], self.mapped[-1][1] + self.mapped[-1][3], m_row, m_col))
-        print(self.mapped[-1])
         return self.mapped[-1][0], self.mapped[-1][1] 
     
     def clear(self):
@@ -274,116 +258,3 @@ class crossbar:
         self.tensors = []
         self.saved_tiles = {}
         self.W = torch.ones(self.size) * self.g_on
-                
-class ticket:
-    def __init__(self, row, col, m_rows, m_cols, matrix, mat_scale_factor, crossbar):
-        self.row, self.col = row, col
-        self.m_rows, self.m_cols = m_rows, m_cols
-        self.crossbar = crossbar
-        self.mat_scale_factor = mat_scale_factor
-        self.matrix = matrix
-        
-        
-    def prep_vector(self, vector, v_bits):
-
-        # Scale vector to [0, 2^v_bits]
-        vect_min = torch.min(vector)
-        vector = vector - vect_min        
-        vect_scale_factor = torch.max(vector) / (2**v_bits - 1)
-        vector = vector / vect_scale_factor if vect_scale_factor != 0.0 else vector
-
-        # decompose vector by bit
-        bit_vector = torch.zeros(vector.size(0),v_bits)
-        bin2s = lambda x : "".join(reversed( [str((int(x) >> i) & 1) for i in range(v_bits)] ) )
-        for j in range(vector.size(0)):
-            bit_vector[j,:] = torch.Tensor([float(i) for i in list(bin2s(vector[j]))])
-        bit_vector *= self.crossbar.V
-
-        # Pad bit vector with unselected voltages
-        pad_vector = torch.zeros(self.crossbar.size[0], v_bits)        
-        pad_vector[self.row:self.row + self.m_rows,:] = bit_vector
-
-        return pad_vector, vect_scale_factor, vect_min
-    
-    def vmm(self, vector, v_bits=4):
-        assert vector.size(1) == 1, "vector wrong shape"
-
-        crossbar = self.crossbar
-        
-        # Rescale vector and convert to bits.
-        pad_vector, vect_scale_factor, vect_min = self.prep_vector(vector, v_bits)
-        
-        # Solve crossbar circuit
-        output = crossbar.solve(pad_vector)
-        
-        # Get relevant output columns and add binary outputs
-        
-        output = output.view(v_bits, -1, 2)[:,:,0] - output.view(v_bits, -1, 2)[:,:,1]
-    
-        for i in range(output.size(0)):
-            output[i] *= 2**(v_bits - i - 1)
-        output = torch.sum(output, axis=0)[self.col:self.col + self.m_cols] 
-        
-        # Rescale output
-        magic_number = 1 # can use to compensate for resistive losses in the lines. Recommend multiplying a bunch of 8x8 integer matrices to find this.
-        
-        output = (output / crossbar.V * vect_scale_factor * self.mat_scale_factor) / magic_number + torch.sum(vect_min * self.matrix, axis=0)
-        
-        return output.view(-1, 1)
-
-device_params = {"Vdd": 1.8,
-                 "r_wl": 20,
-                 "r_bl": 20,
-                 "m": 16,
-                 "n": 16,
-                 "r_on": 1e4,
-                 "r_off": 1e5,
-                 "dac_resolution": 4,
-                 "adc_resolution": 14,
-                 "bias_scheme": 1/3,
-                 "tile_rows": 4,
-                 "tile_cols": 4,
-                 "r_cmos_line": 600,
-                 "r_cmos_transistor": 20,
-                 "r_on_stddev": 1e3,
-                 "r_off_stddev": 1e4,
-                 "p_stuck_on": 0.01,
-                 "p_stuck_off": 0.01,
-                 "method": "viability",
-                 "viability": 0.05,
-}
-
-device_params = {"Vdd": 1.8,
-                 "r_wl": 20,
-                 "r_bl": 20,
-                 "m": 16,
-                 "n": 16,
-                 "r_on": 1e4,
-                 "r_off": 1e5,
-                 "dac_resolution": 4,
-                 "adc_resolution": 14,
-                 "bias_scheme": 1/3,
-                 "tile_rows": 4,
-                 "tile_cols": 4,
-                 "r_cmos_line": 600,
-                 "r_cmos_transistor": 20, 
-                 "p_stuck_on": 0.01,
-                 "p_stuck_off": 0.01,
-                 "r_on_stddev": 1e3,
-                 "r_off_stddev": 1e4,
-                 "device_resolution": 4,
-                 "method": "linear",
-}
-
-#Utility function, should be moved
-def print_mapping(tensors, mapping, crossbar_size):
-    cb = torch.zeros(*crossbar_size)
-    for t, m in zip(tensors, mapping):
-        cb[m[0]:m[0]+m[2], m[1]:m[1]+m[3]] = t
-    rows = torch.nonzero(cb, as_tuple=True)[0].tolist()
-    cols = torch.nonzero(cb, as_tuple=True)[1].tolist()
-    values = cb[torch.nonzero(cb, as_tuple=True)].tolist()
-    for val in zip(rows,cols,values):
-        print(val[0], val[1], val[2], sep=", ")
-
-
