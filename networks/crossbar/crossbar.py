@@ -109,7 +109,7 @@ class crossbar:
         self.current_history = []
 
         # NOT TESTED: GPU CAPABILITY
-        self.device = device_params["device"]
+        # self.device = device_params["device"]
         
     # Iterates through the tiles and solves each and then adds their outputs together. 
     def solve(self, voltage):
@@ -125,7 +125,7 @@ class crossbar:
             coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
             vectors = voltage[i*self.tile_rows:(i+1)*self.tile_rows,:]
             M = self.saved_tiles[str(coords)]
-            Es = torch.cat(tuple(self.make_E(vectors[:, i]).view(-1,1) for i in range(vectors.size(1))), axis=1).to(self.device)
+            Es = torch.cat(tuple(self.make_E(vectors[:, i]).view(-1,1) for i in range(vectors.size(1))), axis=1)
             V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
             output += torch.cat((torch.zeros(voltage.size(1), j*self.tile_cols), torch.sum(V * self.W[coords], axis=1), torch.zeros((voltage.size(1), (self.size[1] // self.tile_cols - j - 1)*self.tile_cols))), axis=1)
             
@@ -188,7 +188,7 @@ class crossbar:
         B = torch.block_diag(*tuple(-torch.diag(g[i,:]) for i in range(m)))
         C = torch.cat([makec(j) for j in range(n)],dim=0)
         D = torch.cat([maked(j) for j in range(0,n)], dim=0)
-        M = torch.inverse(torch.cat((torch.cat((A,B),dim=1), torch.cat((C,D),dim=1)), dim=0)).to(self.device)
+        M = torch.inverse(torch.cat((torch.cat((A,B),dim=1), torch.cat((C,D),dim=1)), dim=0))
 
         self.saved_tiles[str(coords)] = M
 

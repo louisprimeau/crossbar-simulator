@@ -27,7 +27,6 @@ device_params = {"Vdd": 0.2,
                  "p_stuck_off": 0.01,
                  "method": "viability",
                  "viability": 0.05,
-                 "device": torch.device("cpu")
 }
 
 cb = crossbar.crossbar(device_params)
