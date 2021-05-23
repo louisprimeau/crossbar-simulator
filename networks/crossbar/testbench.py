@@ -27,6 +27,7 @@ device_params = {"Vdd": 0.2,
                  "p_stuck_off": 0.01,
                  "method": "viability",
                  "viability": 0.05,
+                 "device": torch.device("cpu")
 }
 
 cb = crossbar.crossbar(device_params)
@@ -40,7 +41,7 @@ torch.manual_seed(seed)
 max_rows = device_params["m"] // 2
 max_cols = device_params["n"]
 
-test_num = 5
+test_num = 1
 
 matrices = [torch.randint(-10, 10, (max_rows, max_cols)) for _ in range(test_num)]
 vectors = [torch.randint(-10, 10, (max_cols, 1)) for _ in range(test_num)]
@@ -49,7 +50,7 @@ cb_time, t_time, error = 0.0, 0.0, 0.0
 for matrix, vector in zip(matrices, vectors):
     cb.clear()
     ticket = cb.register_linear(torch.transpose(matrix,0,1))
-
+    
     start_time = time.time()
     output = ticket.vmm(vector, v_bits=4)
     cb_time += time.time() - start_time
@@ -59,6 +60,7 @@ for matrix, vector in zip(matrices, vectors):
     t_time += time.time() - start_time
 
     error += torch.norm(target - output) / torch.norm(matrix.double())
+
 #current_history = torch.cat(current_history, axis=1)
 print("Average crossbar vmm time:", cb_time / test_num, "s")
 print("Average torch vmm time:", t_time / test_num, "s")

@@ -4,7 +4,7 @@ Louis Primeau
 University of Toronto Department of Electrical and Computer Engineering
 louis.primeau@mail.utoronto.ca
 July 29th 2020
-Last updated: March 21st 2021
+Last updated: May 22nd 2021
 """
 
 """
@@ -34,6 +34,7 @@ class crossbar:
 
         # Wordline Resistance 
         self.r_wl = torch.Tensor((device_params["r_wl"],))
+
         # Bitline Resistance
         self.r_bl = torch.Tensor((device_params["r_bl"],))
 
@@ -107,27 +108,39 @@ class crossbar:
         self.saved_tiles = {}
         self.current_history = []
 
-    
+        # NOT TESTED: GPU CAPABILITY
+        self.device = device_params["device"]
+        
     # Iterates through the tiles and solves each and then adds their outputs together. 
     def solve(self, voltage):
         output = torch.zeros((voltage.size(1), self.size[1]))
-        for i in range(self.size[0] // self.tile_rows):
-            for j in range(self.size[1] // self.tile_cols):
-                coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
-                vect = voltage[i*self.tile_rows:(i+1)*self.tile_rows,:]
-                solution = self.tile_solve(coords, vect)
-                output += torch.cat((torch.zeros(voltage.size(1), j*self.tile_cols), solution, torch.zeros((voltage.size(1), (self.size[1] // self.tile_cols - j - 1)*self.tile_cols))), axis=1)
+
+        for i, j in self.programmed_tiles():
+            coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
+            if str(coords) not in self.saved_tiles.keys():
+                self.make_M(coords) # Lazy hash
+            
+        # This part would be super easy to parallelize.
+        for i, j in self.programmed_tiles():
+            coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
+            vectors = voltage[i*self.tile_rows:(i+1)*self.tile_rows,:]
+            M = self.saved_tiles[str(coords)]
+            Es = torch.cat(tuple(self.make_E(vectors[:, i]).view(-1,1) for i in range(vectors.size(1))), axis=1).to(self.device)
+            V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
+            output += torch.cat((torch.zeros(voltage.size(1), j*self.tile_cols), torch.sum(V * self.W[coords], axis=1), torch.zeros((voltage.size(1), (self.size[1] // self.tile_cols - j - 1)*self.tile_cols))), axis=1)
+            
         self.current_history.append(output)
         return output
 
-    # solves a specific tile. 
-    def tile_solve(self, coords, vectors):
-        if str(coords) not in self.saved_tiles.keys(): M = self.make_M(coords) # Lazy hash
-        else: M = self.saved_tiles[str(coords)]
-        Es = torch.cat(tuple(self.make_E(vectors[:, i]).view(-1,1) for i in range(vectors.size(1))), axis=1)
-        V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
-        I = torch.sum(V * self.W[coords], axis=1)
-        return I
+    # extremely lazy implementation of finding which tiles have been programmed. But crossbars aren't very large so whatever.
+    def programmed_tiles(self):
+        tile_coords = []
+        for coords in self.mapped:
+            for i in range(self.size[0] // self.tile_rows):
+                for j in range(self.size[1] // self.tile_cols):
+                    if i * self.tile_rows <= coords[0] + coords[2] and j * self.tile_cols <= coords[1] + 2*coords[3] and (i,j) not in tile_coords:
+                        tile_coords.append((i,j))
+        return tile_coords
 
     # Constructs the E matrix in MV = E.
     def make_E(self, v_wl_in):
@@ -168,14 +181,14 @@ class crossbar:
         
         A = torch.block_diag(*tuple(torch.diag(g[i,:])
                           + torch.diag(torch.cat((self.g_wl, self.g_wl * 2 * torch.ones(n-2), self.g_wl)))
-                          + torch.diag(self.g_wl * -1 *torch.ones(n-1), diagonal = 1)
-                          + torch.diag(self.g_wl * -1 *torch.ones(n-1), diagonal = -1)
+                          + torch.diag(self.g_wl * -1 * torch.ones(n-1), diagonal = 1)
+                          + torch.diag(self.g_wl * -1 * torch.ones(n-1), diagonal = -1)
                           + torch.diag(torch.cat((self.g_s_wl_in[i].view(1), torch.zeros(n - 2), self.g_s_wl_out[i].view(1))))
                                    for i in range(m)))
         B = torch.block_diag(*tuple(-torch.diag(g[i,:]) for i in range(m)))
         C = torch.cat([makec(j) for j in range(n)],dim=0)
         D = torch.cat([maked(j) for j in range(0,n)], dim=0)
-        M = torch.inverse(torch.cat((torch.cat((A,B),dim=1), torch.cat((C,D),dim=1)), dim=0))
+        M = torch.inverse(torch.cat((torch.cat((A,B),dim=1), torch.cat((C,D),dim=1)), dim=0)).to(self.device)
 
         self.saved_tiles[str(coords)] = M
 
@@ -195,7 +208,6 @@ class crossbar:
             midpoint = self.conductance_states.size(2) // 2
             for i in range(row, row + scaled_matrix.size(0)):
                 for j in range(col, col + scaled_matrix.size(1)):
-                
                     shifted = self.conductance_states[i,j] - self.conductance_states[i,j,midpoint]
                     idx = torch.min(torch.abs(shifted - scaled_matrix[i-row,j-col]), dim=0)[1]
                     self.W[i,2*j+1] = self.conductance_states[i,j,idx]
@@ -240,7 +252,6 @@ class crossbar:
             
         # Format is (*indexes of top left corner, *indexes of bottom right corner + 1 (it's zero indexed))
         if not self.mapped:
-            
             self.mapped.append((0,0,m_row,m_col))
         else:
             if self.mapped[-1][3] + m_col < self.size[1]:

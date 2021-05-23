@@ -39,7 +39,7 @@ class ticket:
         pad_vector, vect_scale_factor, vect_min = self.prep_vector(vector, v_bits)
         
         # Solve crossbar circuit
-        output = crossbar.solve(pad_vector)
+        output = crossbar.solve(pad_vector.to(crossbar.device))
         
         # Get relevant output columns and add binary outputs        
         output = output.view(v_bits, -1, 2)[:,:,0] - output.view(v_bits, -1, 2)[:,:,1]
