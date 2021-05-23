@@ -1,5 +1,7 @@
 import torch
-from .crossbar import crossbar
+
+
+from ..crossbar import crossbar
 
 class linear(torch.autograd.Function):
     @staticmethod
@@ -21,6 +23,7 @@ class Linear(torch.nn.Module):
     def __init__(self, input_size, output_size, cb, bias=False):
         super(Linear, self).__init__()
         self.W = torch.nn.parameter.Parameter(torch.rand(output_size, input_size))
+        
         if bias:
             self.b = torch.nn.parameter.Parameter(torch.rand(output_size, 1))
         else:

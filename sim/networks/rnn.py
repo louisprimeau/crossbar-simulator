@@ -1,5 +1,5 @@
 import torch
-import crossbar
+from ..crossbar import crossbar
 
 class RNN(torch.nn.Module):
     def __init__(self, input_size, hidden_layer_size, cb):

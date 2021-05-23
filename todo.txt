@@ -22,15 +22,11 @@ As can be seen, there is a lot to do. * indicates important. Some of these thing
   - More ODE Solvers
 (5) Improve crossbar circuit solver
   * Mapping for addition on the crossbar (may be involved due to scaling)
-  - Write auto magic scaling number tuning routine
   - fit memristor data to VTEAM model, get parameters
   - Integrate VTEAM python model into crossbar, write iterative circuit solver (basic euler's method?)
   - Expose input / output resistances and voltages to user, this allows for ADC and DAC models later
   - Implement CMOS resistance
   - Improve mapping algorithm, fun little project on optimal rectangle packing
-  - General prettification, move stuff into different files
-  - improve neanderthal inverse hash on inverse matrices
-  - Parallelize stuff (tiles inputs can be multiplied by inverses in parallel, GPU support, etc.)
 (6) Documentation
   - Explain how mapping works, how it can be implemented into C code
   - General docs stuff

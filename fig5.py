@@ -22,7 +22,7 @@ part e) Prediction of RNN-ODE vs. prediction of RNN with similar amount of weigh
 """
 
 import torch
-import networks.rnn_ode as rnn_ode
+import sim.networks.rnn_ode as rnn_ode
 import train
 
 import time
@@ -150,7 +150,7 @@ N, bins, patches = ax5.hist(np.concatenate((left_mapped_weights, right_mapped_we
 
 
 for patch in patches[0]:
-    patch.set_facecolor('orangered')
+    patch.set_facecolor((230 / 255, 151 / 255, 151 / 255))
 
 for patch in patches[1]:
     patch.set_facecolor('turquoise')
@@ -229,3 +229,6 @@ plt.plot(model.node_rnn.observer.history[1], model.node_rnn.observer.history[0],
 plt.show()
 
 """
+
+
+# 230, 151, 151

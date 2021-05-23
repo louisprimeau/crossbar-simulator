@@ -1,5 +1,5 @@
 import torch
-from .crossbar import crossbar
+from ..crossbar import crossbar
 from . import Linear, ODE_net
 from . import observer
         
@@ -12,8 +12,9 @@ class NODERNN(torch.nn.Module):
         self.cb = cb
         self.observer = observer.observer()
 
-        self.linear_in = Linear.Linear(input_size, hidden_layer_size, cb)
-        self.linear_hidden = Linear.Linear(hidden_layer_size, hidden_layer_size, cb)
+        #self.linear_in = Linear.Linear(input_size, hidden_layer_size, cb)
+        #self.linear_hidden = Linear.Linear(hidden_layer_size, hidden_layer_size, cb)
+        self.linear = Linear.Linear(input_size + hidden_layer_size, hidden_layer_size, cb)
         self.solve = ODE_net.eulerforward(hidden_layer_size, N, cb, self.observer)
         self.nonlinear = torch.nn.Tanh()
 
@@ -26,18 +27,21 @@ class NODERNN(torch.nn.Module):
             self.solve.observer_flag = False
             
             if i == (len(x) - 1): self.observer.append(h_i.view(1, -1), t[i])
-            h_i = self.nonlinear(self.linear_in(x_i) + self.linear_hidden(h_i))
+            h_i = self.nonlinear(self.linear(torch.cat((x_i, h_i), axis=0)))
+
             if i == (len(x) - 1): self.observer.append(h_i.view(1, -1), t[i])
         return h_i 
     
     def remap(self):
-        self.linear_in.remap()
-        self.linear_hidden.remap()
+        #self.linear_in.remap()
+        #self.linear_hidden.remap()
+        self.linear.remap()
         self.solve.remap()
     
     def use_cb(self, state):
-        self.linear_in.use_cb(state)
-        self.linear_hidden.use_cb(state)
+        #self.linear_in.use_cb(state)
+        #self.linear_hidden.use_cb(state)
+        self.linear.use_cb(state)
         self.solve.use_cb(state)
 
     # vestigial function

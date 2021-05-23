@@ -1,5 +1,5 @@
 import torch
-from .crossbar import crossbar
+from ..crossbar import crossbar
 from . import observer, Linear
 
 class eulerforward(torch.nn.Module):

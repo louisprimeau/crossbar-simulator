@@ -1,6 +1,7 @@
 import torch
 from . import Linear, ODERNN
 
+
 class Conv(torch.nn.Module):
     def __init__(self, kernel_size, input_size, output_size, cb, padding=True):
         super(Conv, self).__init__()

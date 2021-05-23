@@ -20,7 +20,7 @@ import numpy as np
 import itertools
 import time
 
-from ticket import ticket
+from .ticket import ticket
 
 class crossbar:
     def __init__(self, device_params):

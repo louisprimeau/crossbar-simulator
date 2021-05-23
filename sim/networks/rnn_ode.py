@@ -1,6 +1,6 @@
 import torch
 from . import Linear, ODERNN
-from .crossbar import crossbar
+from ..crossbar import crossbar
 import seaborn as sns
 
 class RNN_ODE(torch.nn.Module):
