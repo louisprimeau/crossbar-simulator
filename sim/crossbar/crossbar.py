@@ -23,7 +23,10 @@ import time
 from .ticket import ticket
 
 class crossbar:
-    def __init__(self, device_params):
+    def __init__(self, device_params, deterministic=False):
+
+        # Useful for debugging
+        self.deterministic = deterministic
 
         # Power Supply Voltage
         self.V = device_params["Vdd"]
@@ -48,8 +51,14 @@ class crossbar:
         # 'linear' programming assumes that there is are 2^resolution states between the on and off resistances of the device.
         # Any number programmed onto the crossbar is rounded to one of those states.
         if (self.method == "linear"):
-            self.g_on = 1 / torch.normal(device_params["r_on"], device_params["r_on_stddev"], size=self.size)
-            self.g_off = 1 / torch.normal(device_params["r_off"], device_params["r_off_stddev"], size=self.size)
+
+            if self.deterministic:
+                self.g_on = torch.ones(self.size) / device_params["r_on"]
+                self.g_off =  torch.ones(self.size) / device_params["r_off"]
+            else:
+                self.g_on = 1 / torch.normal(device_params["r_on"], device_params["r_on_stddev"], size=self.size)
+                self.g_off = 1 / torch.normal(device_params["r_off"], device_params["r_off_stddev"], size=self.size)
+
             # Resolution
             self.resolution = device_params["device_resolution"]
             self.conductance_states = torch.cat([torch.cat([torch.linspace(self.g_off[i,j], self.g_on[i,j],2**self.resolution - 1).unsqueeze(0)
@@ -59,9 +68,16 @@ class crossbar:
         # 'viability' assumes ideal programming to any conductance but the end result is perturbed by gaussian noise with spread
         # equal to some percentage (the "viability") of the conductance. 
         elif self.method == "viability":
-            self.g_on = 1 / torch.normal(device_params["r_on"], device_params["r_on_stddev"], size=self.size)
-            self.g_off = 1 / torch.normal(device_params["r_off"], device_params["r_off_stddev"], size=self.size)
-            self.viability = device_params["viability"]
+
+            if self.deterministic:
+                self.g_on = torch.ones(self.size) / device_params["r_on"]
+                self.g_off =  torch.ones(self.size) / device_params["r_off"]
+                self.viability = 0.0
+            else:
+                self.g_on = 1 / torch.normal(device_params["r_on"], device_params["r_on_stddev"], size=self.size)
+                self.g_off = 1 / torch.normal(device_params["r_off"], device_params["r_off_stddev"], size=self.size) 
+                self.viability = device_params["viability"]
+            
             
         else:
             raise ValueError("device_params['method'] must be \"linear\" or \"viability\"")
@@ -128,7 +144,7 @@ class crossbar:
             Es = torch.cat(tuple(self.make_E(vectors[:, i]).view(-1,1) for i in range(vectors.size(1))), axis=1)
             V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
             output += torch.cat((torch.zeros(voltage.size(1), j*self.tile_cols), torch.sum(V * self.W[coords], axis=1), torch.zeros((voltage.size(1), (self.size[1] // self.tile_cols - j - 1)*self.tile_cols))), axis=1)
-            
+
         self.current_history.append(output)
         return output
 
@@ -224,7 +240,7 @@ class crossbar:
                    self.W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0,std=right_state*self.viability), i, 2*j+1)
                    self.W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j)
 
-        self.apply_stuck()
+        if not self.deterministic: self.apply_stuck()
         
         return ticket(row, col, matrix.size(0), matrix.size(1), matrix, mat_scale_factor, self)
     
