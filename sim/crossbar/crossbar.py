@@ -129,21 +129,23 @@ class crossbar:
         
     # Iterates through the tiles and solves each and then adds their outputs together. 
     def solve(self, voltage):
-        output = torch.zeros((voltage.size(1), self.size[1]))
 
+        output = torch.zeros((voltage.size(1), self.size[1]))
         for i, j in self.programmed_tiles():
             coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
             if str(coords) not in self.saved_tiles.keys():
                 self.make_M(coords) # Lazy hash
-            
+        
         # This part would be super easy to parallelize.
+        Es_all = [None] * (self.size[0] // self.tile_rows)
+        for i in set(j for j, k in self.programmed_tiles()):
+            Es_all[i] = self.make_Es(voltage[i*self.tile_rows:(i+1)*self.tile_rows,:])
+        
         for i, j in self.programmed_tiles():
             coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
-            vectors = voltage[i*self.tile_rows:(i+1)*self.tile_rows,:]
             M = self.saved_tiles[str(coords)]
-            Es = torch.cat(tuple(self.make_E(vectors[:, i]).view(-1,1) for i in range(vectors.size(1))), axis=1)
-            V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
-            output += torch.cat((torch.zeros(voltage.size(1), j*self.tile_cols), torch.sum(V * self.W[coords], axis=1), torch.zeros((voltage.size(1), (self.size[1] // self.tile_cols - j - 1)*self.tile_cols))), axis=1)
+            V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es_all[i]), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
+            output[:, j*self.tile_cols:(j+1)*self.tile_cols] += torch.sum(V * self.W[coords], axis=1)
 
         self.current_history.append(output)
         return output
@@ -159,12 +161,21 @@ class crossbar:
         return tile_coords
 
     # Constructs the E matrix in MV = E.
+    # used like: Es = torch.cat(tuple(self.make_E(vectors[:, i]).view(-1,1) for i in range(vectors.size(1))), axis=1)
+    # saved here for posterity
     def make_E(self, v_wl_in):
         m, n = self.tile_rows, self.tile_cols
         E = torch.cat([torch.cat(((v_wl_in[i]*self.g_s_wl_in[i]).view(1), torch.zeros(n-2), (self.v_wl_out[i]*self.g_s_wl_out[i]).view(1))) for i in range(m)] +
                       [torch.cat(((-self.v_bl_in[i]*self.g_s_bl_in[i]).view(1), torch.zeros(m-2),(-self.v_bl_in[i]*self.g_s_bl_out[i]).view(1))) for i in range(n)]).view(-1, 1)
         return E
 
+    # Vectorized version of make_E
+    def make_Es(self,  v_wl_ins):
+        width = v_wl_ins.size(1)
+        m, n = self.tile_rows, self.tile_cols
+        Es = torch.cat([torch.cat(((v_wl_ins[i, :] * self.g_s_wl_in[i]).view(1, width), torch.zeros(n-2, width), (self.v_wl_out[i].view(-1, 1).repeat(1, width) * self.g_s_wl_out[i]).view(1, width))) for i in range(m)] + [torch.cat(((-self.v_bl_in[i].view(-1, 1).repeat(1, width) * self.g_s_bl_in[i]).view(1, width), torch.zeros(m-2, width), (-self.v_bl_in[i].view(-1, 1).repeat(1, width) * self.g_s_bl_out[i]).view(1,  width))) for i in range(n)]).view(-1, width)
+        return Es
+    
     # Constructs the M matrix in MV = E. 
     def make_M(self, coords):
         
