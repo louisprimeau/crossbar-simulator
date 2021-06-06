@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import transforms, datasets
 
-
 device_params = {"Vdd": 0.2,
                  "r_wl": 20,
                  "r_bl": 20,
@@ -29,13 +28,13 @@ device_params = {"Vdd": 0.2,
 }
 
 transform = transforms.Compose(
-    [transforms.ToTensor(),
-     transforms.Resize((8,8)),
-     transforms.Normalize((0.5), (0.5))]
+    [transforms.Resize((8,8)),
+     transforms.ToTensor(),
+     transforms.Normalize((0.5,), (0.5,))]
 )
 
-trainset = datasets.MNIST('~/mnist/', download=True, train=True, transform=transform)
-valset = datasets.MNIST('~/mnist/', download=True, train=False, transform=transform)
+trainset = datasets.MNIST('~/mnist/', download=False, train=True, transform=transform)
+valset = datasets.MNIST('~/mnist/', download=False, train=False, transform=transform)
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=1, shuffle=True)
 valloader = torch.utils.data.DataLoader(valset, batch_size=1, shuffle=True)
 
@@ -57,7 +56,6 @@ def train(network):
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(network.parameters(), lr=0.001, momentum=0.9)
-
     epochs = 3
     
     for epoch in range(1, epochs+1):
@@ -90,6 +88,8 @@ def train(network):
 test_network = net()
 #test_network.conv.use_cb(True)
 #test_network.linear.use_cb(True)
-print(train(test_network))
+#print(train(test_network))
+
+#print(test_network(torch.eye(5).unsqueeze(2)).squeeze())
 
 
