@@ -19,6 +19,7 @@ import torch
 import numpy as np
 import itertools
 import time
+import warnings
 
 from .ticket import ticket
 
@@ -222,38 +223,66 @@ class crossbar:
         return M
 
     # Handles programming for the crossbar instance. 
-    def register_linear(self, matrix, bias=None):
-
-        self.tensors.append(matrix)
-        row, col = self.find_space(matrix.size(0), matrix.size(1))
-        # Need to add checks for bias size and col size
+    def register_linear(self, matrix, bias=None, row=None, col=None, index=None):
+        assert not ((row is not None) and (col is not None) and (index is not None)), "either specify (row and col) or (index) or (neither). cannot specify both"
         
-        # Scale matrix                            
-        if (self.method == "linear"):                
-            mat_scale_factor = torch.max(torch.abs(matrix)) / torch.max(self.g_on) * 2
-            scaled_matrix = matrix / mat_scale_factor
-            midpoint = self.conductance_states.size(2) // 2
-            for i in range(row, row + scaled_matrix.size(0)):
-                for j in range(col, col + scaled_matrix.size(1)):
-                    shifted = self.conductance_states[i,j] - self.conductance_states[i,j,midpoint]
-                    idx = torch.min(torch.abs(shifted - scaled_matrix[i-row,j-col]), dim=0)[1]
-                    self.W[i,2*j+1] = self.conductance_states[i,j,idx]
-                    self.W[i,2*j] = self.conductance_states[i,j,midpoint-(idx-midpoint)]
-                    
-        elif (self.method == "viability"):
-            mat_scale_factor = torch.max(torch.abs(matrix)) / (torch.max(self.g_on) - torch.min(self.g_off)) * 2
-            scaled_matrix = matrix / mat_scale_factor
-            for i in range(row, row + scaled_matrix.size(0)):
-               for j in range(col, col + scaled_matrix.size(1)):
-                   midpoint = (self.g_on[i,j] - self.g_off[i,j]) / 2 + self.g_off[i,j]
-                   right_state = midpoint + scaled_matrix[i-row,j-col] / 2
-                   left_state = midpoint - scaled_matrix[i-row,j-col] / 2
-                   self.W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0,std=right_state*self.viability), i, 2*j+1)
-                   self.W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j)
+        with torch.no_grad():
 
-        if not self.deterministic: self.apply_stuck()
-        
-        return ticket(row, col, matrix.size(0), matrix.size(1), matrix, mat_scale_factor, self)
+            assert len(self.tensors) == len(self.mapped), "tensors and indices out of sync"
+
+            if (row is None and col is None and index is None):
+
+                index = len(self.tensors)
+                self.tensors.append(matrix)
+                row, col = self.find_space(matrix.size(0), matrix.size(1))
+                print("registering new tensor,", row, col)
+            
+            elif (row is None and col is None and index is not None):
+
+                self.tensors[index] = matrix
+                row, col = self.mapped[index][:2]
+                
+            elif (row is not None and col is not None and index is None):
+                
+                warnings.warn("Specifying row and column manually may result in collisions")
+                index = len(self.tensors)
+                self.tensors.append(matrix)
+                self.mapped.append((row, col, matrix.size(0), matrix.size(1)))
+                
+
+            else:
+                raise ValueError("You have encountered an edge case, please email louis")
+                
+            # TODO: Need to add checks for bias size and col size
+
+            # Scale matrix                            
+            if (self.method == "linear"):                
+                mat_scale_factor = torch.max(torch.abs(matrix)) / torch.max(self.g_on) * 2
+                scaled_matrix = matrix / mat_scale_factor
+                midpoint = self.conductance_states.size(2) // 2
+                for i in range(row, row + scaled_matrix.size(0)):
+                    for j in range(col, col + scaled_matrix.size(1)):
+                        shifted = self.conductance_states[i,j] - self.conductance_states[i,j,midpoint]
+                        idx = torch.min(torch.abs(shifted - scaled_matrix[i-row,j-col]), dim=0)[1]
+                        self.W[i,2*j+1] = self.conductance_states[i,j,idx]
+                        self.W[i,2*j] = self.conductance_states[i,j,midpoint-(idx-midpoint)]
+
+            elif (self.method == "viability"):
+                mat_scale_factor = torch.max(torch.abs(matrix)) / (torch.max(self.g_on) - torch.min(self.g_off)) * 2
+                scaled_matrix = matrix / mat_scale_factor
+                for i in range(row, row + scaled_matrix.size(0)):
+                   for j in range(col, col + scaled_matrix.size(1)):
+                       midpoint = (self.g_on[i,j] - self.g_off[i,j]) / 2 + self.g_off[i,j]
+                       right_state = midpoint + scaled_matrix[i-row,j-col] / 2
+                       left_state = midpoint - scaled_matrix[i-row,j-col] / 2
+
+                       if(scaled_matrix[i-row, j-col] == 0.0): print(right_state, left_state)
+                       self.W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0,std=right_state*self.viability), i, 2*j+1)
+                       self.W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j)
+
+            if not self.deterministic: self.apply_stuck()
+
+        return ticket(index, row, col, matrix.size(0), matrix.size(1), matrix, mat_scale_factor, self)
     
     def clip(self, tensor, i, j):
         if self.g_off[i,j] < tensor < self.g_on[i,j]:
@@ -282,7 +311,7 @@ class crossbar:
             self.mapped.append((0,0,m_row,m_col))
         else:
             if self.mapped[-1][3] + m_col < self.size[1]:
-                self.mapped.append((self.mapped[-1][0], self.mapped[-1][3], m_row, m_col))
+                self.mapped.append((self.mapped[-1][0], self.mapped[-1][1] + self.mapped[-1][3], m_row, m_col))
             else:
                 if m_col > (self.size[0] - self.mapped[-1][2]):
                     raise ValueError("Matrix with {} rows does not fit on crossbar with {} free rows".format(m_col, self.size[0] - self.mapped[-1][2]))    

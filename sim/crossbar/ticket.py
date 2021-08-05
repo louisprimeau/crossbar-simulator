@@ -1,13 +1,27 @@
 import torch
+from memory_profiler import profile
 
 class ticket:
-    def __init__(self, row, col, m_rows, m_cols, matrix, mat_scale_factor, crossbar):
+    def __init__(self, index, row, col, m_rows, m_cols, matrix, mat_scale_factor, crossbar):
         self.row, self.col = row, col
         self.m_rows, self.m_cols = m_rows, m_cols
         self.crossbar = crossbar
         self.mat_scale_factor = mat_scale_factor
         self.matrix = matrix
+        self.index = index
         
+    def remap(self, new_matrix):
+        assert new_matrix.size() == self.matrix.size(), "new matrix is not the same size as the old one!"
+        new_ticket = self.crossbar.register_linear(new_matrix, index=self.index)
+
+        self.mat_scale_factor = new_ticket.mat_scale_factor
+        self.matrix = new_ticket.matrix
+
+        assert self.row == new_ticket.row
+        assert self.col == new_ticket.col
+        assert self.m_rows == new_ticket.m_rows
+        assert self.m_cols == new_ticket.m_cols
+        assert self.index == new_ticket.index
         
     def prep_vector(self, vector, v_bits):
 
@@ -47,7 +61,7 @@ class ticket:
         for i in range(output.size(0)):
             output[i] *= 2**(v_bits - i - 1)
         output = torch.sum(output, axis=0)[self.col:self.col + self.m_cols] 
-        
+
         # Rescale output
         magic_number = 1 # can use to compensate for resistive losses in the lines. Recommend multiplying a bunch of 8x8 integer matrices to find this.
         
