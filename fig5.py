@@ -54,8 +54,8 @@ device_params = {"Vdd": 1.8,
                  "r_cmos_transistor": 20,
                  "r_on_stddev": 1e3,
                  "r_off_stddev": 1e4,
-                 "p_stuck_on": 0.01,
-                 "p_stuck_off": 0.01,
+                 "p_stuck_on": 0.0,
+                 "p_stuck_off": 0.0,
                  "method": "viability",
                  "viability": 0.05,
 }
@@ -66,9 +66,9 @@ size = 1
 tw = 10
 cutoff = 50
 #x = torch.rand(1, n_pts) * 24 * pi
-#x = torch.sort(x, axis=1)[0]
+#x torch.sort(x, axis=1)[0]
 x = torch.linspace(0, 24*pi, n_pts).view(1, -1)
-y = torch.sin(x) / 2 + 0.5 + torch.rand(x.size()) / 10
+y = torch.sin(x) / 2 + 0.5# + torch.rand(x.size()) / 10
 data = [((y[:, i:i+tw].reshape(-1, size, 1), x[:, i:i+tw].reshape(-1, 1, 1)), (y[:, i+tw:i+tw+1].reshape(-1, size))) for i in range(y.size(1) - tw)] 
 train_data, test_start = data[:cutoff], data[cutoff]
 
@@ -86,12 +86,12 @@ for ax in ax_cmap:
     ax.set(xticklabels=[])
     ax.set(yticklabels=[])
 
-
 # TRAIN MODELS AND PLOT
 time_steps = 50
 epochs = 15
 num_predict= 30
 start_time = time.time()
+
 
 model = rnn_ode.RNN_ODE(1, 4, 1, device_params, time_steps)
 losses = train.train(train_data, model, epochs)
@@ -143,7 +143,6 @@ ax2.scatter(t[::(time_steps + 2)],
 
 unmapped_weights = torch.cat([tensor.reshape(-1).detach() for tensor in model.cb.tensors], axis=0)
 ax4.hist(unmapped_weights.numpy().reshape(-1), bins=20, color='pink')
-
 left_mapped_weights = torch.cat([model.cb.W[m[0]:m[0]+m[2], m[1]:m[1]+m[3]:2].reshape(-1).detach() for m in model.cb.mapped], axis=0).numpy().reshape(-1, 1)
 right_mapped_weights = torch.cat([model.cb.W[m[0]+1:m[0]+m[2]+1, m[1]+1:m[1]+m[3]+1:2].reshape(-1).detach() for m in model.cb.mapped], axis=0).numpy().reshape(-1,1)
 N, bins, patches = ax5.hist(np.concatenate((left_mapped_weights, right_mapped_weights), axis=1), stacked=True, bins=20, label=('left weights', 'right weights'))
@@ -166,7 +165,7 @@ print("Generating Training Graph")
 losses = [] # make range of colors
 for i in range(30):
     print("Model", i, "| elapsed time:", "{:5.2f}".format((time.time() - start_time) / 60), "min")
-    model = rnn_ode.RNN_ODE(1, 8, 1, device_params, time_steps)
+    model = rnn_ode.RNN_ODE(1, 4, 1, device_params, time_steps)
     losses.append(torch.cat([item.detach().view(-1) for item in train.train(train_data, model, epochs)]).view(-1).numpy())
     print(losses[-1])
     
@@ -176,17 +175,17 @@ for loss in losses:
          linewidth=0.5,
          color='lightgrey')
 
-
 for j in range(1):
-    model = rnn_ode.RNN_ODE(1, 8, 1, device_params, time_steps)
+    model = rnn_ode.RNN_ODE(1, 4, 1, device_params, time_steps)
     model.use_cb(True)
-    losses_real = train.train(train_data, model, epochs)
+    losses_real = train.train(train_data, model, epochs, verbose=True)
     ax3.plot(list(range(epochs)),
          losses_real,
          linewidth=1.2,
          color='magenta')
     model.use_cb(False)
-    
+
+
 ax1.plot(x.squeeze()[:cutoff+num_predict+tw], y.squeeze()[:cutoff+num_predict+tw], linewidth=0.5, color='k', linestyle='dashed')
 ax1.axvline(x=float(x.squeeze()[cutoff + tw - 1]), color='k')
 ax1.spines['right'].set_visible(False)
@@ -232,3 +231,4 @@ plt.show()
 
 
 # 230, 151, 151
+

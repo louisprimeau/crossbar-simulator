@@ -235,8 +235,7 @@ class crossbar:
                 index = len(self.tensors)
                 self.tensors.append(matrix)
                 row, col = self.find_space(matrix.size(0), matrix.size(1))
-                print("registering new tensor,", row, col)
-            
+
             elif (row is None and col is None and index is not None):
 
                 self.tensors[index] = matrix
@@ -249,7 +248,6 @@ class crossbar:
                 self.tensors.append(matrix)
                 self.mapped.append((row, col, matrix.size(0), matrix.size(1)))
                 
-
             else:
                 raise ValueError("You have encountered an edge case, please email louis")
                 
@@ -275,8 +273,6 @@ class crossbar:
                        midpoint = (self.g_on[i,j] - self.g_off[i,j]) / 2 + self.g_off[i,j]
                        right_state = midpoint + scaled_matrix[i-row,j-col] / 2
                        left_state = midpoint - scaled_matrix[i-row,j-col] / 2
-
-                       if(scaled_matrix[i-row, j-col] == 0.0): print(right_state, left_state)
                        self.W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0,std=right_state*self.viability), i, 2*j+1)
                        self.W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j)
 

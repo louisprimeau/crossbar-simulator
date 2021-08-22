@@ -12,18 +12,20 @@ class Conv2d(torch.nn.Module):
         self.input_size = in_channels
         self.output_size = out_channels
         self.cb = cb
-        self.kernel = Linear.Linear(self.input_size * kernel_size**2, out_channels, cb)
+
+        self.conv_weight = torch.rand(out_channels, in_channels, kernel_size, kernel_size)
+        conv_weight_as_matrix = self.conv_weight.reshape(out_channels, in_channels * kernel_size**2)
+        self.kernel = Linear.Linear(self.input_size * kernel_size**2, out_channels, cb, W=conv_weight_as_matrix)
         self.bias = torch.nn.parameter.Parameter(torch.rand(out_channels, 1, 1))
         self.cbon = False
-        print(in_channels, out_channels)
-
+        
     def forward(self, inp):
         assert inp.size(1) == self.input_size, "inp channels = {}, but in channels was {} on declaration".format(inp.size(1), self.input_size)
 
-        if self.cbon:
-            return conv2d.apply(inp, self.kernel.W.reshape(self.input_size, self.output_size, 3, 3), self.bias, self.kernel)
-        else:
-            return f.conv2d(inp, self.kernel.W.reshape(self.input_size, self.output_size, 3, 3), bias=self.bias, padding=1) 
+        #if self.cbon:
+        return conv2d.apply(inp, self.kernel.W.reshape(self.input_size, self.output_size, 3, 3), self.bias, self.kernel)
+        #else:
+        #return f.conv2d(inp, self.kernel.W.reshape(self.input_size, self.output_size, 3, 3), bias=self.bias.squeeze(), padding=1) 
     
     def remap(self):
         self.kernel.remap()
@@ -38,21 +40,22 @@ class conv2d(torch.autograd.Function):
     def forward(ctx, image, kernel, bias, linear_method):
 
         ctx.save_for_backward(image, kernel, bias)
-
+        
+        padding=1
+        pad_image = torch.nn.functional.pad(image, (padding, padding, padding, padding), mode='constant')
+        kernel_as_matrix = kernel.reshape(kernel.size(0), kernel.size(1) * kernel.size(2) * kernel.size(3))
         batches = []
-        for x in image:            
-            x = x.unsqueeze(0) # So the tensors are still rank 4
-            pd = 1
-            padded = torch.nn.functional.pad(x, (pd, pd, pd, pd, 0, 0, 0, 0), mode='constant')
+        for batch in range(pad_image.size(0)):
             rows = []
-            for i in range(pd, x.size(2) + pd):
+            for row in range(1, pad_image.size(-2)-1):
                 cols = []
-                for j in range(pd, x.size(3) + pd):
-                    cols.append(linear_method(padded[:, :, i-1:i+2, j-1:j+2].reshape(-1, 1)).reshape(1,-1,1,1) + bias.unsqueeze(0))
-                rows.append(torch.cat(cols, axis=3))
-            batches.append(torch.cat(rows, axis=2))
-        output = torch.cat(batches, axis=0)
-        return output
+                for col in range(1, pad_image.size(-1)-1):
+                    cols.append(linear_method(pad_image[batch:batch+1, :, row-1:row+2, col-1:col+2].reshape(1, -1, 1)).reshape(1,-1,1,1))
+                    #cols.append(kernel_as_matrix.mm(pad_image[batch:batch+1, :, row-1:row+2, col-1:col+2].reshape(-1, 1)).reshape(1, -1, 1, 1))
+                    if bias is not None: cols[-1] += bias.reshape(1, -1, 1, 1)
+                rows.append(torch.cat(cols, axis=-1))
+            batches.append(torch.cat(rows, axis=-2))
+        return torch.cat(batches, axis=0)
     
     @staticmethod
     def backward(ctx, d_output):
