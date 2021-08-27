@@ -77,10 +77,10 @@ def train(network, epochs):
             loss = criterion(out, label)
             loss.backward()
 
-            print(network.ode_ef_block.kernel2.grad)
-            print(network.ode_ef_block.conv1.conv_weight.grad)
+            #print(network.ode_ef_block.kernel2.grad)
+            #print(network.ode_ef_block.conv1.conv_weight.grad)
 
-            
+            network.ode_ef_block.remap()
             optimizer.step()
             
             epoch_loss += loss
