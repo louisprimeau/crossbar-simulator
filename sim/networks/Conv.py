@@ -1,7 +1,7 @@
 import torch
 import time
 import torch.nn.functional as f
-from . import Linear, ODERNN
+from . import Linear, ODERNN, util
 
 # Torch module wrapper for conv2d
 class Conv2d(torch.nn.Module):
@@ -13,22 +13,24 @@ class Conv2d(torch.nn.Module):
         self.output_size = out_channels
         self.cb = cb
 
-        self.conv_weight = torch.rand(out_channels, in_channels, kernel_size, kernel_size)
-        conv_weight_as_matrix = self.conv_weight.reshape(out_channels, in_channels * kernel_size**2)
-        self.kernel = Linear.Linear(self.input_size * kernel_size**2, out_channels, cb, W=conv_weight_as_matrix)
-        self.bias = torch.nn.parameter.Parameter(torch.rand(out_channels, 1, 1))
+        self.conv_kernel, conv_kernel_as_m = util.kaiming_kernel(self.input_size, self.output_size, self.kernel_size)
+        self.bias, bias_as_m = util.normal_kernel(self.output_size)
+        stacked_kernel_as_m = torch.cat((conv_kernel_as_m, bias_as_m), axis=1)
+        self.kernel = Linear.Linear(stacked_kernel_as_m.size(1), stacked_kernel_as_m.size(0), cb, W=stacked_kernel_as_m, bias=True)
+        
         self.cbon = False
         
     def forward(self, inp):
         assert inp.size(1) == self.input_size, "inp channels = {}, but in channels was {} on declaration".format(inp.size(1), self.input_size)
-
-        #if self.cbon:
-        return conv2d.apply(inp, self.kernel.W.reshape(self.input_size, self.output_size, 3, 3), self.bias, self.kernel)
-        #else:
-        #return f.conv2d(inp, self.kernel.W.reshape(self.input_size, self.output_size, 3, 3), bias=self.bias.squeeze(), padding=1) 
-    
+        if self.cbon:
+            return conv2d.apply(inp, self.conv_kernel, self.bias, self.kernel)
+        else:
+            return torch.nn.functional.conv2d(inp, self.conv_kernel, self.bias, padding=1)
+            
     def remap(self):
-        self.kernel.remap()
+        conv_kernel_as_m = util.kernel_to_matrix(self.conv_kernel)
+        bias_as_m = self.bias.unsqueeze(1)
+        self.kernel.remap(torch.cat((conv_kernel_as_m, bias_as_m), axis=1))
         
     def use_cb(self, state):
         self.cbon = state
@@ -41,9 +43,8 @@ class conv2d(torch.autograd.Function):
 
         ctx.save_for_backward(image, kernel, bias)
         
-        padding=1
-        pad_image = torch.nn.functional.pad(image, (padding, padding, padding, padding), mode='constant')
-        kernel_as_matrix = kernel.reshape(kernel.size(0), kernel.size(1) * kernel.size(2) * kernel.size(3))
+        pd = 1
+        pad_image = torch.nn.functional.pad(image, (pd, pd, pd, pd), mode='constant')
         batches = []
         for batch in range(pad_image.size(0)):
             rows = []
@@ -51,8 +52,7 @@ class conv2d(torch.autograd.Function):
                 cols = []
                 for col in range(1, pad_image.size(-1)-1):
                     cols.append(linear_method(pad_image[batch:batch+1, :, row-1:row+2, col-1:col+2].reshape(1, -1, 1)).reshape(1,-1,1,1))
-                    #cols.append(kernel_as_matrix.mm(pad_image[batch:batch+1, :, row-1:row+2, col-1:col+2].reshape(-1, 1)).reshape(1, -1, 1, 1))
-                    if bias is not None: cols[-1] += bias.reshape(1, -1, 1, 1)
+                    #if bias is not None: cols[-1] += bias.reshape(1, -1, 1, 1)
                 rows.append(torch.cat(cols, axis=-1))
             batches.append(torch.cat(rows, axis=-2))
         return torch.cat(batches, axis=0)

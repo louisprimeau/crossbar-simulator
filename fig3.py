@@ -57,6 +57,7 @@ class ode_net(torch.nn.Module):
         x = F.relu(self.linear(torch.flatten(x, 1).unsqueeze(2)).squeeze(2))
         x = self.linear2(torch.flatten(x, 1).unsqueeze(2)).squeeze(2)
         return x
+    
     def remap(self):
         self.ode_ef_block.remap()
 
