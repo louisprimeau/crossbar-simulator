@@ -42,9 +42,9 @@ device_params = {"Vdd": 1.8,
                  "viability": 0.05,
 }
 
-class net(torch.nn.Module):
+class ode_net(torch.nn.Module):
     def __init__(self):
-        super(net, self).__init__()
+        super(ode_net, self).__init__()
 
         self.cb = crossbar.crossbar(device_params, deterministic=False)
         self.conv1 = torch.nn.Conv2d(1, 3, 3, stride=2, padding=1)
@@ -54,10 +54,35 @@ class net(torch.nn.Module):
     def forward(self, x):
         x = F.relu(self.conv1(x))
         x = self.ode_ef_block(x)
-
         x = F.relu(self.linear(torch.flatten(x, 1).unsqueeze(2)).squeeze(2))
         x = self.linear2(torch.flatten(x, 1).unsqueeze(2)).squeeze(2)
         return x
+    def remap(self):
+        self.ode_ef_block.remap()
+
+class regular_net(torch.nn.Module):
+    def __init__(self):
+        super(regular_net, self).__init__()
+
+        self.cb = crossbar.crossbar(device_params, deterministic=False)
+        self.conv1 = torch.nn.Conv2d(1, 3, 3, stride=2, padding=1)
+        self.resnet = torch.nn.Sequential(torch.nn.Conv2d(3, 3, 3, padding=1),
+                                           torch.nn.ReLU(),
+                                           torch.nn.Conv2d(3, 3, 3, padding=1),
+                                           )
+        
+        self.linear = linear.Linear(4 * 4 * 3, 40, self.cb)
+        self.linear2 = linear.Linear(40, 10, self.cb)
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = torch.nn.functional.relu(self.resnet(x) + x)
+        x = F.relu(self.linear(torch.flatten(x, 1).unsqueeze(2)).squeeze(2))
+        x = self.linear2(torch.flatten(x, 1).unsqueeze(2)).squeeze(2)
+        return x
+    def remap(self):
+        return None
+
+
     
 def train(network, epochs):
 
@@ -80,7 +105,7 @@ def train(network, epochs):
             #print(network.ode_ef_block.kernel2.grad)
             #print(network.ode_ef_block.conv1.conv_weight.grad)
 
-            network.ode_ef_block.remap()
+            network.remap()
             optimizer.step()
             
             epoch_loss += loss
@@ -88,7 +113,7 @@ def train(network, epochs):
             num_correct += torch.sum(torch.argmax(out, 1) == label)
 
             
-        losses.append(epoch_loss / num_batches)
+        losses.append((epoch_loss / num_batches).detach())
         print("Train Score: {:.2f}%, ({} / {})".format(num_correct / i / 64 * 100, num_correct, i*64))
 
         num_correct = 0
@@ -109,7 +134,7 @@ for ax in ax_cmap:
     ax.set(xticklabels=[])
     ax.set(yticklabels=[])
 
-model = net()
+model = ode_net()
 
 coord = model.ode_ef_block.cb.mapped[model.ode_ef_block.kernel_and_id.ticket.index]
 
@@ -120,21 +145,21 @@ vmin = min(torch.min(weight) for weight in weights)
 for i, weight in enumerate(weights):
     sns.heatmap(weight.detach(), vmax=vmax, vmin=vmin, cmap=cmap, square=True, cbar=False if i!=len(weights)-1 else True, ax=ax_cmap[i])
 
-test_network_1 = net()
-test_network_2 = net()
+test_network_1 = ode_net()
+test_network_2 = regular_net()
 #test_network.conv.use_cb(True)
 #test_network.linear.use_cb(True)
 #test_network.conv.use_cb(False)
 #test_network.linear.use_cb(False)
 
-epochs = 30
-test_network_1, losses_1, accuracies_1 = train(test_network_1, epochs)
-test_network_2, losses_2, accuracies_2 = train(test_network_2, epochs)
+epochs = 2
+test_network_1, losses_1, accuracies_1 = train(test_network_1, 30)
+test_network_2, losses_2, accuracies_2 = train(test_network_2, 30)
 
 fig1, ax1 = plt.subplots(nrows=1)
 
 ax1.plot(list(range(epochs)),
-         losses_1,     
+         [a.detach().item() for a in losses_1],     
          'o-',
          linewidth=0.5,
          color='deepskyblue',
@@ -142,7 +167,7 @@ ax1.plot(list(range(epochs)),
          )
 
 ax1.plot(list(range(epochs)),
-         losses_2,     
+         [a.detach().item() for a in losses_2],     
          'o-',
          linewidth=0.5,
          color='crimson',
@@ -152,6 +177,6 @@ ax1.plot(list(range(epochs)),
 ax1.spines['top'].set_visible(False)
 ax1.set_xlabel('Epoch', fontsize=16)
 ax1.set_ylabel('Cross Entropy Loss', fontsize=16)
-ax1.legend(('NODE', 'Conventional'), loc='top right')
+ax1.legend(('NODE', 'Conventional'), loc='upper right')
 
 plt.show()
