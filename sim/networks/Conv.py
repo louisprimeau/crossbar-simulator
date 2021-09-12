@@ -22,12 +22,12 @@ class conv2d(torch.autograd.Function):
     def forward(ctx, image, kernel, bias, linear_method, padding=1, stride=1):
 
         ctx.save_for_backward(image, kernel, bias)
-        ctx.params = stride, padding        
+        ctx.params = padding, stride
         return conv2d_crossbar(image, kernel, bias, linear_method, padding, stride)
 
     def backward(ctx, d_output):
         image, kernel, bias = ctx.saved_variables
-        stride, padding = ctx.params
+        padding, stride = ctx.params
 
         d_input = grad.conv2d_input(image.shape, kernel, d_output, stride, padding, 1, 1)
         d_weight = grad.conv2d_weight(image, kernel.shape, d_output, stride, padding, 1, 1)
@@ -54,8 +54,10 @@ class Conv2d(torch.nn.Module):
     def forward(self, inp):
         assert inp.size(1) == self.in_channels, "inp channels = {}, but in channels was {} on declaration".format(inp.size(1), self.in_channels)
 
-        if self.cbon: return conv2d.apply(inp, self.conv_kernel, self.bias, self.kernel, padding=self.padding, stride=self.stride)
-        else: return f.conv2d(inp, self.conv_kernel, self.bias, padding=self.padding, stride=self.stride)
+        if self.cbon: out =  conv2d.apply(inp, self.conv_kernel, self.bias, self.kernel, padding=self.padding, stride=self.stride)
+        else: out = f.conv2d(inp, self.conv_kernel, self.bias, padding=self.padding, stride=self.stride)
+
+        return out
             
     def remap(self):
         conv_kernel_as_m = util.kernel_to_matrix(self.conv_kernel)

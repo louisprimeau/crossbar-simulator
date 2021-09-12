@@ -9,7 +9,7 @@ class gemv(torch.autograd.Function):
     @staticmethod
     def forward(ctx, ticket, alpha, A, x, beta, b):
         ctx.save_for_backward(alpha, A, x, beta, b)
-        return ticket.vmm(torch.cat((x, torch.ones(x.size(0), 1, 1))), v_bits=8)
+        return ticket.vmm(torch.cat((x, torch.ones(1, 1))), v_bits=16)
         
     @staticmethod
     def backward(ctx, dx):
@@ -41,7 +41,9 @@ class GEMV(torch.nn.Module):
         assert alpha.size() == (1,), "alpha has incorrect shape {}, should be {}".format(alpha.size(), (1,))
         assert beta.size() == (1,), "beta has incorrect shape {}, should be {}".format(beta.size(), (1,))
 
+
         matrix = torch.cat((self.A.transpose(0, 1) * self.alpha, self.b.transpose(0, 1) * self.beta))
+
         self.ticket = cb.register_linear(matrix)
         self.f = gemv()
 
@@ -53,7 +55,7 @@ class GEMV(torch.nn.Module):
         if self.cbon:
             return self.f.apply(self.ticket, self.alpha, self.A, x, self.beta, self.b)
         else:
-            return self.alpha * self.W.unsqueeze(0).expand(x.size(0), -1, -1).bmm(x) + self.beta * self.b
+            return self.alpha * self.A.mm(x) + self.beta * self.b
 
     def remap(self):
         matrix = torch.cat((self.A.transpose(0, 1) * self.alpha, self.b.transpose(0, 1) * self.beta))
@@ -61,5 +63,4 @@ class GEMV(torch.nn.Module):
     
     def use_cb(self, state):
         self.cbon = state
-
 

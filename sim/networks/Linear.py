@@ -32,7 +32,9 @@ class Linear(torch.nn.Module):
         
     def forward(self, x):
         assert (len(x.size()) == 3) and ((x.size(1) + self.bias) == self.W.size(1)) and (x.size(2) == 1), "input invalid shape"
+        
         if self.bias: x = torch.cat((x, torch.ones(x.size(0), 1, 1)), axis=1)
+        
         if self.cbon: return torch.cat([self.f.apply(self.ticket, item, self.W) for item in x], axis=0)
         else: return self.W.unsqueeze(0).expand(x.size(0), -1, -1).bmm(x)
 

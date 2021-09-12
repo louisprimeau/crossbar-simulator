@@ -32,7 +32,7 @@ class ticket:
         vector = vector / vect_scale_factor if vect_scale_factor != 0.0 else vector
 
         # decompose vector by bit
-        bit_vector = torch.zeros(vector.size(0),v_bits)
+        bit_vector = torch.zeros(vector.size(0), v_bits)
         bin2s = lambda x : "".join(reversed( [str((int(x) >> i) & 1) for i in range(v_bits)] ) )
         for j in range(vector.size(0)):
             bit_vector[j,:] = torch.Tensor([float(i) for i in list(bin2s(vector[j]))])
@@ -44,7 +44,7 @@ class ticket:
 
         return pad_vector, vect_scale_factor, vect_min
     
-    def vmm(self, vector, v_bits=4):
+    def vmm(self, vector, v_bits=16):
         assert vector.size(1) == 1, "vector wrong shape"
 
         crossbar = self.crossbar
@@ -56,7 +56,7 @@ class ticket:
         output = crossbar.solve(pad_vector)
         
         # Get relevant output columns and add binary outputs        
-        output = output.view(v_bits, -1, 2)[:,:,0] - output.view(v_bits, -1, 2)[:,:,1]
+        output = output.view(v_bits, -1, 2)[:, :, 0] - output.view(v_bits, -1, 2)[:, :, 1]
     
         for i in range(output.size(0)):
             output[i] *= 2**(v_bits - i - 1)
