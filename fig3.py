@@ -1,4 +1,4 @@
-import torch
+
 from torchvision import transforms, datasets
 import torch.nn as nn
 import torch.nn.functional as F
@@ -23,7 +23,7 @@ valloader = torch.utils.data.DataLoader(valset, batch_size=64, shuffle=True)
 device_params = {"Vdd": 1.8,
                  "r_wl": 20,
                  "r_bl": 20,
-                 "m": 64,
+                 "m": 128,
                  "n": 128,
                  "r_on": 1e4,
                  "r_off": 1e5,
@@ -47,18 +47,22 @@ class ode_net(torch.nn.Module):
         super(ode_net, self).__init__()
 
         self.cb = crossbar.crossbar(device_params, deterministic=False)
-        self.conv1 = torch.nn.Conv2d(1, 3, 3, stride=2, padding=1)
+        self.conv1 = conv.Conv2d(1, 3, 3, self.cb, stride=2, padding=1)
+        #self.conv1 = torch.nn.Conv2d(1, 3, 3, stride=2, padding=1)
         self.ode_ef_block = ef_net.simple_EF_block(3, 3, self.cb)
         self.linear = linear.Linear(4 * 4 * 3, 40, self.cb)
         self.linear2 = linear.Linear(40, 10, self.cb)
+        
     def forward(self, x):
         x = F.relu(self.conv1(x))
         x = self.ode_ef_block(x)
         x = F.relu(self.linear(torch.flatten(x, 1).unsqueeze(2)).squeeze(2))
         x = self.linear2(torch.flatten(x, 1).unsqueeze(2)).squeeze(2)
+
         return x
     
     def remap(self):
+        self.conv1.remap()
         self.ode_ef_block.remap()
 
 class regular_net(torch.nn.Module):
@@ -95,32 +99,37 @@ def train(network, epochs):
         print("Epoch", epoch)
         num_correct = 0
         epoch_loss, num_batches = 0, 0
-        for i, (example, label) in enumerate(trainloader, 0):
-            network.zero_grad()
-            #if i == 100: break
+
+        with torch.enable_grad():
         
-            out = network(example) 
-            loss = criterion(out, label)
-            loss.backward()
+            for i, (example, label) in enumerate(trainloader, 0):
+                network.zero_grad()
+                #if i == 100: break
 
-            #print(network.ode_ef_block.kernel2.grad)
-            #print(network.ode_ef_block.conv1.conv_weight.grad)
+                out = network(example) 
+                loss = criterion(out, label)
+                loss.backward()
 
-            network.remap()
-            optimizer.step()
-            
-            epoch_loss += loss
-            num_batches += 1
-            num_correct += torch.sum(torch.argmax(out, 1) == label)
+                #print(network.ode_ef_block.kernel2.grad)
+                #print(network.ode_ef_block.conv1.conv_weight.grad)
+
+                network.remap()
+                optimizer.step()
+
+                epoch_loss += loss
+                num_batches += 1
+                num_correct += torch.sum(torch.argmax(out, 1) == label)
 
             
         losses.append((epoch_loss / num_batches).detach())
         print("Train Score: {:.2f}%, ({} / {})".format(num_correct / i / 64 * 100, num_correct, i*64))
 
-        num_correct = 0
-        for example, label in valloader:
-            out = torch.argmax(network(example), 1)
-            num_correct += torch.sum(out == label)
+        with torch.no_grad():
+        
+            num_correct = 0
+            for example, label in valloader:
+                out = torch.argmax(network(example), 1)
+                num_correct += torch.sum(out == label)
 
         print("Validation Score: {:.2f}%, ({} / {})".format(num_correct / len(valloader) / 64 * 100, num_correct, len(valloader)*64))
         accuracies.append(num_correct / len(valloader) / 64)
@@ -128,7 +137,7 @@ def train(network, epochs):
     return network, losses, accuracies
 
 
-fig5, ax_cmap = plt.subplots(ncols=5, figsize=(20, 3))
+fig5, ax_cmap = plt.subplots(ncols=6, figsize=(20, 3))
 cmap = sns.blend_palette(("#fa7de3", "#ffffff", "#6ef3ff"), n_colors=9, as_cmap=True, input='hex')
 
 for ax in ax_cmap:
@@ -153,9 +162,9 @@ test_network_2 = regular_net()
 #test_network.conv.use_cb(False)
 #test_network.linear.use_cb(False)
 
-epochs = 2
-test_network_1, losses_1, accuracies_1 = train(test_network_1, 30)
-test_network_2, losses_2, accuracies_2 = train(test_network_2, 30)
+epochs = 30
+test_network_1, losses_1, accuracies_1 = train(test_network_1, epochs)
+test_network_2, losses_2, accuracies_2 = train(test_network_2, epochs)
 
 fig1, ax1 = plt.subplots(nrows=1)
 
@@ -179,5 +188,30 @@ ax1.spines['top'].set_visible(False)
 ax1.set_xlabel('Epoch', fontsize=16)
 ax1.set_ylabel('Cross Entropy Loss', fontsize=16)
 ax1.legend(('NODE', 'Conventional'), loc='upper right')
+
+
+fig2, ax2 = plt.subplots(nrows=1)
+
+ax2.plot(list(range(epochs)),
+         accuracies_1,
+         'o-',
+         linewidth=0.5,
+         color='deepskyblue',
+         markerfacecolor='none',
+         )
+
+ax2.plot(list(range(epochs)),
+         accuracies_2,
+         'o-',
+         linewidth=0.5,
+         color='crimson',
+         markerfacecolor='none',
+         )
+
+ax2.spines['top'].set_visible(False)
+ax2.set_xlabel('Epoch', fontsize=16)
+ax2.set_ylabel('Validation Accuracy', fontsize=16)
+ax2.legend(('NODE', 'Conventional'), loc='upper right')
+
 
 plt.show()

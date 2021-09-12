@@ -3,7 +3,7 @@ from . import Linear, util
 import torch.nn.functional as f
 import torch.nn.grad as grad
 
-def conv2d_crossbar(image, kernel, bias, linear_method, padding, stride):
+def conv2d_crossbar(image, linear_method, padding, stride):
     pd = padding
     pad_image = f.pad(image, (pd, pd, pd, pd), mode='constant')
     batches = []
@@ -23,17 +23,17 @@ class conv2d(torch.autograd.Function):
 
         ctx.save_for_backward(image, kernel, bias)
         ctx.params = padding, stride
-        return conv2d_crossbar(image, kernel, bias, linear_method, padding, stride)
+        return conv2d_crossbar(image, linear_method, padding, stride)
 
     def backward(ctx, d_output):
         image, kernel, bias = ctx.saved_variables
         padding, stride = ctx.params
 
-        d_input = grad.conv2d_input(image.shape, kernel, d_output, stride, padding, 1, 1)
-        d_weight = grad.conv2d_weight(image, kernel.shape, d_output, stride, padding, 1, 1)
+        d_image = grad.conv2d_input(image.shape, kernel, d_output, stride, padding, 1, 1)
+        d_kernel = grad.conv2d_weight(image, kernel.shape, d_output, stride, padding, 1, 1)
         d_bias = torch.sum(d_output, (-1, -2)).view(-1)
 
-        return d_input, d_weight, d_bias, None, None, None, None
+        return d_image, d_kernel, d_bias, None, None, None, None
 
 class Conv2d(torch.nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, cb, padding=1, stride=1, dtype=torch.float):

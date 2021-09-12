@@ -95,10 +95,8 @@ class conv2d_plusId(torch.autograd.Function):
                 )
         return out
 
-
-
     
-class conv2d_rkinput(torch.autograd.Function):
+class conv2d_plus_rk(torch.autograd.Function):
     @staticmethod
     def forward(ctx, image1, image2, kernel, bias, func_method):
         assert image1.size() == image2.size(), "input images not same shape: {} and {}".format(image1.size(), image2.size())
