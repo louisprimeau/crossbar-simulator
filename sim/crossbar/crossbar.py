@@ -266,27 +266,25 @@ class crossbar:
                         self.W[i,2*j] = self.conductance_states[i,j,midpoint-(idx-midpoint)]
 
             elif (self.method == "viability"):
-                mat_scale_factor = torch.max(torch.abs(matrix)) / (torch.max(self.g_on) - torch.min(self.g_off)) * 2
+                mat_scale_factor = torch.max(torch.abs(matrix)) / (torch.min(self.g_on) - torch.max(self.g_off)) * 2
                 scaled_matrix = matrix / mat_scale_factor
                 for i in range(row, row + scaled_matrix.size(0)):
                    for j in range(col, col + scaled_matrix.size(1)):
                        midpoint = (self.g_on[i,j] - self.g_off[i,j]) / 2 + self.g_off[i,j]
                        right_state = midpoint + scaled_matrix[i-row,j-col] / 2
                        left_state = midpoint - scaled_matrix[i-row,j-col] / 2
+                       if left_state <= 0: print(left_state)
                        self.W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0,std=right_state*self.viability), i, 2*j+1)
-                       self.W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j)
+                       self.W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j) if left_state > 0.0 else 0.0
 
             if not self.deterministic: self.apply_stuck()
 
         return ticket(index, row, col, matrix.size(0), matrix.size(1), matrix, mat_scale_factor, self)
     
     def clip(self, tensor, i, j):
-        if self.g_off[i,j] < tensor < self.g_on[i,j]:
-            return tensor
-        elif tensor > self.g_on[i,j]:
-            return self.g_on[i,j]
-        else:
-            return self.g_off[i,j]
+        assert self.g_off[i, j] < self.g_on[i, j]
+        return torch.clip(tensor, min=self.g_off[i, j], max=self.g_on[i, j])
+
     
     def apply_stuck(self):
         self.W[self.state_mask == 0] = self.g_off[self.state_mask==0]
