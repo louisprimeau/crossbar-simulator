@@ -70,14 +70,14 @@ class crossbar:
         # equal to some percentage (the "viability") of the conductance. 
         elif self.method == "viability":
 
-            if self.deterministic:
-                self.g_on = torch.ones(self.size) / device_params["r_on"]
-                self.g_off =  torch.ones(self.size) / device_params["r_off"]
-                self.viability = 0.0
-            else:
-                self.g_on = 1 / torch.normal(device_params["r_on"], device_params["r_on_stddev"], size=self.size)
-                self.g_off = 1 / torch.normal(device_params["r_off"], device_params["r_off_stddev"], size=self.size) 
-                self.viability = device_params["viability"]
+            
+            self.g_on = torch.ones(self.size) / device_params["r_on"]
+            self.g_off =  torch.ones(self.size) / device_params["r_off"]
+            self.viability = device_params["viability"]
+
+            #self.g_on = 1 / torch.normal(device_params["r_on"], device_params["r_on_stddev"], size=self.size)
+            #self.g_off = 1 / torch.normal(device_params["r_off"], device_params["r_off_stddev"], size=self.size) 
+            #self.viability = device_params["viability"]
             
             
         else:
@@ -130,25 +130,28 @@ class crossbar:
         
     # Iterates through the tiles and solves each and then adds their outputs together. 
     def solve(self, voltage):
-
+        p_tiles = self.programmed_tiles()
         output = torch.zeros((voltage.size(1), self.size[1]))
-        for i, j in self.programmed_tiles():
+        
+        for i, j in p_tiles:
             coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
             if str(coords) not in self.saved_tiles.keys():
                 self.make_M(coords) # Lazy hash
         
         # This part would be super easy to parallelize.
         Es_all = [None] * (self.size[0] // self.tile_rows)
-        for i in set(j for j, k in self.programmed_tiles()):
+        for i in set(j for j, _ in p_tiles):
             Es_all[i] = self.make_Es(voltage[i*self.tile_rows:(i+1)*self.tile_rows,:])
-        
-        for i, j in self.programmed_tiles():
+            
+        for i, j in p_tiles:
             coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
             M = self.saved_tiles[str(coords)]
             V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es_all[i]), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
-            output[:, j*self.tile_cols:(j+1)*self.tile_cols] += torch.sum(V * self.W[coords], axis=1)
+            I = torch.sum(V * self.W[coords], axis=1)
+            output[:, j*self.tile_cols:(j+1)*self.tile_cols] += I 
 
         self.current_history.append(output)
+
         return output
 
     # extremely lazy implementation of finding which tiles have been programmed. But crossbars aren't very large so whatever.
@@ -157,7 +160,7 @@ class crossbar:
         for coords in self.mapped:
             for i in range(self.size[0] // self.tile_rows):
                 for j in range(self.size[1] // self.tile_cols):
-                    if i * self.tile_rows <= coords[0] + coords[2] and j * self.tile_cols <= coords[1] + 2*coords[3] and (i,j) not in tile_coords:
+                    if i * self.tile_rows <= coords[0] + coords[2] and j * self.tile_cols <= 2*(coords[1] + coords[3]) and (i,j) not in tile_coords:
                         tile_coords.append((i,j))
         return tile_coords
 
@@ -179,7 +182,7 @@ class crossbar:
     
     # Constructs the M matrix in MV = E. 
     def make_M(self, coords):
-        
+
         g = self.W[coords]
         m, n = self.tile_rows, self.tile_cols
 
@@ -250,8 +253,6 @@ class crossbar:
                 
             else:
                 raise ValueError("You have encountered an edge case, please email louis")
-                
-            # TODO: Need to add checks for bias size and col size
 
             # Scale matrix                            
             if (self.method == "linear"):                
@@ -266,26 +267,26 @@ class crossbar:
                         self.W[i,2*j] = self.conductance_states[i,j,midpoint-(idx-midpoint)]
 
             elif (self.method == "viability"):
-                mat_scale_factor = torch.max(torch.abs(matrix)) / (torch.min(self.g_on) - torch.max(self.g_off)) * 2
+                new_W = self.W.clone().detach()
+                mat_scale_factor = torch.max(torch.abs(matrix)) / (torch.max(self.g_on) - torch.min(self.g_off)) * 2
                 scaled_matrix = matrix / mat_scale_factor
                 for i in range(row, row + scaled_matrix.size(0)):
                    for j in range(col, col + scaled_matrix.size(1)):
                        midpoint = (self.g_on[i,j] - self.g_off[i,j]) / 2 + self.g_off[i,j]
                        right_state = midpoint + scaled_matrix[i-row,j-col] / 2
                        left_state = midpoint - scaled_matrix[i-row,j-col] / 2
-                       if left_state <= 0: print(left_state)
-                       self.W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0,std=right_state*self.viability), i, 2*j+1)
-                       self.W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j) if left_state > 0.0 else 0.0
-
+                       new_W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0, std=right_state*self.viability), i, 2*j+1)
+                       new_W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j) if left_state > 0.0 else 0.0
+                self.W = new_W
             if not self.deterministic: self.apply_stuck()
 
+        self.saved_tiles = {}
         return ticket(index, row, col, matrix.size(0), matrix.size(1), matrix, mat_scale_factor, self)
     
     def clip(self, tensor, i, j):
         assert self.g_off[i, j] < self.g_on[i, j]
         return torch.clip(tensor, min=self.g_off[i, j], max=self.g_on[i, j])
 
-    
     def apply_stuck(self):
         self.W[self.state_mask == 0] = self.g_off[self.state_mask==0]
         self.W[self.state_mask == 1] = self.g_on[self.state_mask==1]

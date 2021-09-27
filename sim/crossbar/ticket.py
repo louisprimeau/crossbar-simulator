@@ -13,7 +13,7 @@ class ticket:
     def remap(self, new_matrix):
         assert new_matrix.size() == self.matrix.size(), "new matrix is not the same size as the old one!"
         new_ticket = self.crossbar.register_linear(new_matrix, index=self.index)
-
+        
         self.mat_scale_factor = new_ticket.mat_scale_factor
         self.matrix = new_ticket.matrix
 
@@ -54,17 +54,20 @@ class ticket:
         
         # Solve crossbar circuit
         output = crossbar.solve(pad_vector)
-        
+
         # Get relevant output columns and add binary outputs        
         output = output.view(v_bits, -1, 2)[:, :, 0] - output.view(v_bits, -1, 2)[:, :, 1]
-    
         for i in range(output.size(0)):
             output[i] *= 2**(v_bits - i - 1)
-        output = torch.sum(output, axis=0)[self.col:self.col + self.m_cols] 
+        output = torch.sum(output, axis=0)[self.col:self.col + self.m_cols]
 
         # Rescale output
         magic_number = 1 # can use to compensate for resistive losses in the lines. Recommend multiplying a bunch of 8x8 integer matrices to find this.
-        
+
+
+        print(torch.sum(vect_min * self.matrix, axis=0))
+        print(output / crossbar.V * vect_scale_factor * self.mat_scale_factor)
         output = (output / crossbar.V * vect_scale_factor * self.mat_scale_factor) / magic_number + torch.sum(vect_min * self.matrix, axis=0)
+
         
         return output.view(-1, 1)
