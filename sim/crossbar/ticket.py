@@ -9,6 +9,9 @@ class ticket:
         self.mat_scale_factor = mat_scale_factor
         self.matrix = matrix
         self.index = index
+
+
+        self.row_sum = torch.sum(self.matrix, axis=0)
         
     def remap(self, new_matrix):
         assert new_matrix.size() == self.matrix.size(), "new matrix is not the same size as the old one!"
@@ -27,19 +30,21 @@ class ticket:
 
         # Scale vector to [0, 2^v_bits]
         vect_min = torch.min(vector)
-        vector = vector - vect_min        
+        vector = vector - vect_min
+
         vect_scale_factor = torch.max(vector) / (2**v_bits - 1)
-        vector = vector / vect_scale_factor if vect_scale_factor != 0.0 else vector
+        print(vect_scale_factor)
+        vector = torch.round(vector / vect_scale_factor if vect_scale_factor != 0.0 else vector).type(torch.long)
+        print("vector", vector)
+        if v_bits > 1:
+            bit_vector = torch.flip(vector.unsqueeze(-1).bitwise_and(2**torch.arange(v_bits)).ne(0).byte().squeeze(), (1,)).type(torch.float) * self.crossbar.V
+        else:
+            bit_vector = vector.type(torch.float) * self.crossbar.V
 
-        # decompose vector by bit
-        bit_vector = torch.zeros(vector.size(0), v_bits)
-        bin2s = lambda x : "".join(reversed( [str((int(x) >> i) & 1) for i in range(v_bits)] ) )
-        for j in range(vector.size(0)):
-            bit_vector[j,:] = torch.Tensor([float(i) for i in list(bin2s(vector[j]))])
-        bit_vector *= self.crossbar.V
 
+        print(bit_vector)
         # Pad bit vector with unselected voltages
-        pad_vector = torch.zeros(self.crossbar.size[0], v_bits)        
+        pad_vector = torch.zeros(self.crossbar.size[0], v_bits)
         pad_vector[self.row:self.row + self.m_rows,:] = bit_vector
 
         return pad_vector, vect_scale_factor, vect_min
@@ -47,15 +52,19 @@ class ticket:
     def vmm(self, vector, v_bits=16):
         assert vector.size(1) == 1, "vector wrong shape"
 
+        v_bits = 24
         crossbar = self.crossbar
         
         # Rescale vector and convert to bits.
         pad_vector, vect_scale_factor, vect_min = self.prep_vector(vector, v_bits)
+
         
         # Solve crossbar circuit
         output = crossbar.solve(pad_vector)
-
-        # Get relevant output columns and add binary outputs        
+        
+        torch.set_printoptions(precision=6)
+        print("output:", output)
+        # Get relevant output columns and add binary outputs
         output = output.view(v_bits, -1, 2)[:, :, 0] - output.view(v_bits, -1, 2)[:, :, 1]
         for i in range(output.size(0)):
             output[i] *= 2**(v_bits - i - 1)
@@ -64,10 +73,5 @@ class ticket:
         # Rescale output
         magic_number = 1 # can use to compensate for resistive losses in the lines. Recommend multiplying a bunch of 8x8 integer matrices to find this.
 
-
-        print(torch.sum(vect_min * self.matrix, axis=0))
-        print(output / crossbar.V * vect_scale_factor * self.mat_scale_factor)
-        output = (output / crossbar.V * vect_scale_factor * self.mat_scale_factor) / magic_number + torch.sum(vect_min * self.matrix, axis=0)
-
-        
+        output = (output / crossbar.V * vect_scale_factor * self.mat_scale_factor) / magic_number + vect_min * self.row_sum
         return output.view(-1, 1)
