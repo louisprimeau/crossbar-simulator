@@ -21,7 +21,7 @@ import itertools
 import time
 import warnings
 
-from .ticket import ticket
+from .ticket import ticket, ticket_direct
 
 class crossbar:
     def __init__(self, device_params, deterministic=False):
@@ -51,6 +51,9 @@ class crossbar:
         # Device Programming Error approximation
         # 'linear' programming assumes that there is are 2^resolution states between the on and off resistances of the device.
         # Any number programmed onto the crossbar is rounded to one of those states.
+
+        self.r_on = device_params["r_on"]
+        self.r_off = device_params["r_off"]
         if (self.method == "linear"):
 
             if self.deterministic:
@@ -69,8 +72,6 @@ class crossbar:
         # 'viability' assumes ideal programming to any conductance but the end result is perturbed by gaussian noise with spread
         # equal to some percentage (the "viability") of the conductance. 
         elif self.method == "viability":
-
-            
             self.g_on = torch.ones(self.size) / device_params["r_on"]
             self.g_off =  torch.ones(self.size) / device_params["r_off"]
             self.viability = device_params["viability"]
@@ -100,23 +101,22 @@ class crossbar:
         self.r_cmos_line = device_params["r_cmos_line"]
 
         # WL & BL resistances
-        self.g_s_wl_in = torch.ones(self.tile_rows) * 1e12
-        self.g_s_wl_out = torch.ones(self.tile_rows) * 1e-12
-        self.g_s_bl_in = torch.ones(self.tile_rows) * 1e-12
-        self.g_s_bl_out = torch.ones(self.tile_rows) * 1e12
+        self.g_s_wl_in = torch.ones(self.tile_rows) * device_params["r_in"]
+        self.g_s_wl_out = torch.ones(self.tile_rows) * device_params["r_out"]
+        self.g_s_bl_in = torch.ones(self.tile_rows) * 1
+        self.g_s_bl_out = torch.ones(self.tile_rows) * 1e9
 
         # WL & BL voltages that are not the signal, assume bl_in, wl_out are tied low and bl_out is tied to 1 V. 
         self.v_bl_in = torch.zeros(self.size[1])
         self.v_bl_out = torch.ones(self.size[1])
         self.v_wl_out = torch.zeros(self.size[0])
-
         
         E_B = torch.cat([torch.cat(((-self.v_bl_in[i] * self.g_s_bl_in[i]).view(1), torch.zeros(self.tile_cols-2), (-self.v_bl_in[i] * self.g_s_bl_out[i]).view(1))).unsqueeze(1) for i in range(self.tile_rows)])
         E_W = torch.cat([torch.cat(((torch.zeros(1) * self.g_s_wl_in[i]).view(1), torch.zeros(self.tile_cols-2), (self.v_wl_out[i].view(1) * self.g_s_wl_out[i]).view(1))) for i in range(self.tile_rows)]).unsqueeze(1)
         self.E = torch.cat((E_B, E_W))
 
         # Conductance Matrix; initialize each memristor at the on resstance
-        self.W = torch.ones(self.size) * self.g_on
+        self.W = torch.ones(self.size) * self.g_off
 
         # Stuck-on & stuck-on device nonideality 
         self.p_stuck_on = device_params["p_stuck_on"]
@@ -150,12 +150,11 @@ class crossbar:
             
         for i, j in p_tiles:
             coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
-            #print(Es_all)
             M = self.saved_tiles[str(coords)]
             V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es_all[i]), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
-            #print("V",V)
             I = torch.sum(V * self.W[coords], axis=1)
             output[:, j*self.tile_cols:(j+1)*self.tile_cols] += I 
+
 
         self.current_history.append(output)
 
@@ -167,7 +166,7 @@ class crossbar:
         for coords in self.mapped:
             for i in range(self.size[0] // self.tile_rows):
                 for j in range(self.size[1] // self.tile_cols):
-                    if i * self.tile_rows <= coords[0] + coords[2] and j * self.tile_cols <= 2*(coords[1] + coords[3]) and (i,j) not in tile_coords:
+                    if i * self.tile_rows <= coords[0] + coords[2] and j * self.tile_cols <= (coords[1] + coords[3]) and (i,j) not in tile_coords:
                         tile_coords.append((i,j))
         return tile_coords
 
@@ -215,70 +214,85 @@ class crossbar:
         C = torch.cat([makec(j) for j in range(n)],dim=0)
         D = torch.cat([maked(j) for j in range(0,n)], dim=0)
 
-        M = torch.cat((torch.cat((A,B),dim=1), torch.cat((C,D),dim=1)), dim=0)
-
-        #print(A, B, C, D, sep='\n')
-        #print("M", M)
-        M = torch.inverse(M)
+        M = torch.inverse(torch.cat((torch.cat((A,B),dim=1), torch.cat((C,D),dim=1)), dim=0))
 
         self.saved_tiles[str(coords)] = M
 
         return M
 
-    # Handles programming for the crossbar instance. 
+
+    def register_direct(self, conductance_matrix, index=None):
+        
+        if index is None:
+            index = len(self.tensors)
+            row, col = self.find_space(conductance_matrix.size(0), conductance_matrix.size(1))
+            self.tensors.append(torch.empty(1))
+        else:
+            row, col = self.mapped[index][:2]
+
+        new_W = self.W.clone().detach()
+        for i in range(row, row + conductance_matrix.size(0)):
+           for j in range(col, col + conductance_matrix.size(1)):
+               new_W[i,j] = self.clip(conductance_matrix[i-row,j-col] + torch.normal(mean=0, std=conductance_matrix[i-row,j-col]*self.viability), i, j)       
+        self.W = new_W
+
+        return ticket_direct(index, row, col, conductance_matrix.size(0), conductance_matrix.size(1), conductance_matrix, self)
+        
+    # Handles programming for the crossbar instance.
+    @torch.no_grad()
     def register_linear(self, matrix, bias=None, row=None, col=None, index=None):
         assert not ((row is not None) and (col is not None) and (index is not None)), "either specify (row and col) or (index) or (neither). cannot specify both"
         
-        with torch.no_grad():
+        assert len(self.tensors) == len(self.mapped), "tensors and indices out of sync"
 
-            assert len(self.tensors) == len(self.mapped), "tensors and indices out of sync"
+        if (row is None and col is None and index is None):
 
-            if (row is None and col is None and index is None):
+            index = len(self.tensors)
+            self.tensors.append(matrix)
+            row, col = self.find_space(matrix.size(0), matrix.size(1) * 2)
+            col = col // 2
 
-                index = len(self.tensors)
-                self.tensors.append(matrix)
-                row, col = self.find_space(matrix.size(0), matrix.size(1))
+        elif (row is None and col is None and index is not None):
 
-            elif (row is None and col is None and index is not None):
+            self.tensors[index] = matrix
+            row, col = self.mapped[index][:2]
+            col = col // 2
+            
+        elif (row is not None and col is not None and index is None):
 
-                self.tensors[index] = matrix
-                row, col = self.mapped[index][:2]
-                
-            elif (row is not None and col is not None and index is None):
-                
-                warnings.warn("Specifying row and column manually may result in collisions")
-                index = len(self.tensors)
-                self.tensors.append(matrix)
-                self.mapped.append((row, col, matrix.size(0), matrix.size(1)))
-                
-            else:
-                raise ValueError("You have encountered an edge case, please email louis")
+            warnings.warn("Specifying row and column manually may result in collisions")
+            index = len(self.tensors)
+            self.tensors.append(matrix)
+            self.mapped.append((row, col, matrix.size(0), matrix.size(1) * 2))
 
-            # Scale matrix                            
-            if (self.method == "linear"):                
-                mat_scale_factor = torch.max(torch.abs(matrix)) / torch.max(self.g_on) * 2
-                scaled_matrix = matrix / mat_scale_factor
-                midpoint = self.conductance_states.size(2) // 2
-                for i in range(row, row + scaled_matrix.size(0)):
-                    for j in range(col, col + scaled_matrix.size(1)):
-                        shifted = self.conductance_states[i,j] - self.conductance_states[i,j,midpoint]
-                        idx = torch.min(torch.abs(shifted - scaled_matrix[i-row,j-col]), dim=0)[1]
-                        self.W[i,2*j+1] = self.conductance_states[i,j,idx]
-                        self.W[i,2*j] = self.conductance_states[i,j,midpoint-(idx-midpoint)]
+        else:
+            raise ValueError("You have encountered an edge case, please email louis")
 
-            elif (self.method == "viability"):
-                new_W = self.W.clone().detach()
-                mat_scale_factor = torch.max(torch.abs(matrix)) / (torch.max(self.g_on) - torch.min(self.g_off)) * 2
-                scaled_matrix = matrix / mat_scale_factor
-                for i in range(row, row + scaled_matrix.size(0)):
-                   for j in range(col, col + scaled_matrix.size(1)):
-                       midpoint = (self.g_on[i,j] - self.g_off[i,j]) / 2 + self.g_off[i,j]
-                       right_state = midpoint + scaled_matrix[i-row,j-col] / 2
-                       left_state = midpoint - scaled_matrix[i-row,j-col] / 2
-                       new_W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0, std=right_state*self.viability), i, 2*j+1)
-                       new_W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j) if left_state > 0.0 else 0.0
-                self.W = new_W
-            if not self.deterministic: self.apply_stuck()
+        # Scale matrix                            
+        if (self.method == "linear"):                
+            mat_scale_factor = torch.max(torch.abs(matrix)) / torch.max(self.g_on) * 2
+            scaled_matrix = matrix / mat_scale_factor
+            midpoint = self.conductance_states.size(2) // 2
+            for i in range(row, row + scaled_matrix.size(0)):
+                for j in range(col, col + scaled_matrix.size(1)):
+                    shifted = self.conductance_states[i,j] - self.conductance_states[i,j,midpoint]
+                    idx = torch.min(torch.abs(shifted - scaled_matrix[i-row,j-col]), dim=0)[1]
+                    self.W[i,2*j+1] = self.conductance_states[i,j,idx]
+                    self.W[i,2*j] = self.conductance_states[i,j,midpoint-(idx-midpoint)]
+
+        elif (self.method == "viability"):
+            new_W = self.W.clone().detach()
+            mat_scale_factor = torch.max(torch.abs(matrix)) / (torch.max(self.g_on) - torch.min(self.g_off)) * 2
+            if mat_scale_factor == 0.0: mat_scale_factor = 1.0
+            scaled_matrix = matrix / mat_scale_factor
+            midpoint = (1 / self.r_on + 1 / self.r_off) / 2
+            right_state, left_state = midpoint + scaled_matrix / 2,  midpoint - scaled_matrix / 2
+            right_state = right_state + torch.randn(right_state.size()) * right_state * self.viability
+            left_state = left_state + torch.randn(left_state.size()) * left_state * self.viability
+            new_W[row:row+scaled_matrix.size(0), col:col + scaled_matrix.size(1) * 2] = torch.stack((left_state, right_state), dim=2).view(right_state.size(0), right_state.size(1) * 2)
+            self.W = new_W
+  
+        if not self.deterministic: self.apply_stuck()
 
         self.saved_tiles = {}
         return ticket(index, row, col, matrix.size(0), matrix.size(1), matrix, mat_scale_factor, self)
@@ -296,11 +310,12 @@ class crossbar:
                                  range(col // self.tile_cols,(col + m_col) // self.tile_cols + 1),
         )
 
+    # Accepts number of rows and cols in a target conductance matrix
     def find_space(self, m_row, m_col):
 
-        if m_row > self.size[0] or m_col*2 > self.size[1]:
-                raise ValueError("Matrix with size ({}, {}) is too large for crossbar of size ({}, {})".format(m_row, m_col, self.size[0], self.size[1]))
-            
+        if m_row > self.size[0] or m_col > self.size[1]:
+                raise ValueError("Conductance matrix with size ({}, {}) is too large for crossbar of size ({}, {})".format(m_row, m_col, self.size[0], self.size[1]))
+        
         # Format is (*indexes of top left corner, *indexes of bottom right corner + 1 (it's zero indexed))
         if not self.mapped:
             self.mapped.append((0,0,m_row,m_col))
@@ -308,8 +323,9 @@ class crossbar:
             if self.mapped[-1][3] + m_col < self.size[1]:
                 self.mapped.append((self.mapped[-1][0], self.mapped[-1][1] + self.mapped[-1][3], m_row, m_col))
             else:
-                if m_col > (self.size[0] - self.mapped[-1][2]):
-                    raise ValueError("Matrix with {} rows does not fit on crossbar with {} free rows".format(m_col, self.size[0] - self.mapped[-1][2]))    
+                
+                if m_row > (self.size[0] - self.mapped[-1][2]):
+                    raise ValueError("Matrix with {} rows does not fit on crossbar with {} free rows".format(m_row, self.size[0] - self.mapped[-1][2]))    
                 self.mapped.append((self.mapped[-1][2], 0, m_row, m_col))
                 
         #self.mapped.append((self.mapped[-1][0] + self.mapped[-1][2], self.mapped[-1][1] + self.mapped[-1][3], m_row, m_col))
