@@ -22,16 +22,17 @@ class linear(torch.autograd.Function):
 # now with batching!
 # handles inputs of size (N, input_size, 1), outputs (N, output_size, 1)
 class Linear(torch.nn.Module):
-    def __init__(self, input_size, output_size, cb, W=None, bias=False, vbits=16):
+    def __init__(self, input_size, output_size, cb, W=None, bias=False, vbits=16, bypass=False):
         super(Linear, self).__init__()
 
         self.bias = bias
         self.W = W if W is not None else torch.nn.parameter.Parameter((torch.rand(output_size, input_size + self.bias)-0.5)*2 / (output_size * input_size)**0.5)
         self.cb = cb 
-        self.ticket = cb.register_linear(torch.transpose(self.W, 0, 1))
+        self.ticket = cb.register_linear(torch.transpose(self.W, 0, 1), bypass=bypass)
         self.f = linear()
         self.cbon = False
         self.vbits = vbits
+        self.bypass = bypass
         
     def forward(self, x):
         
@@ -43,14 +44,14 @@ class Linear(torch.nn.Module):
             out = torch.cat([self.f.apply(self.ticket, item, self.W, self.vbits).reshape(1, -1) for item in x], axis=0)
         else:
             out =  self.W.unsqueeze(0).expand(x.size(0), -1, -1).bmm(x).squeeze(2)
-
+        
         return out
 
     def remap(self, W=None):
         if W is None:
-            self.ticket.remap(torch.transpose(self.W, 0, 1))
+            self.ticket.remap(torch.transpose(self.W, 0, 1), bypass=self.bypass)
         else:
-            self.ticket.remap(torch.transpose(W, 0, 1))
+            self.ticket.remap(torch.transpose(W, 0, 1), bypass=self.bypass)
             self.W = W
     
     def use_cb(self, state):

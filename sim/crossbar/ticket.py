@@ -11,9 +11,9 @@ class ticket:
         self.index = index
         self.row_sum = torch.sum(self.matrix, axis=0)
         
-    def remap(self, new_matrix):
+    def remap(self, new_matrix, bypass=False):
         assert new_matrix.size() == self.matrix.size(), "new matrix is not the same size as the old one!"
-        new_ticket = self.crossbar.register_linear(new_matrix, index=self.index)
+        new_ticket = self.crossbar.register_linear(new_matrix, index=self.index, bypass=bypass)
         
         self.mat_scale_factor = new_ticket.mat_scale_factor
         self.matrix = new_ticket.matrix
@@ -32,12 +32,14 @@ class ticket:
         vector = vector - vect_min
 
         vect_scale_factor = torch.max(vector) / (2**v_bits - 1)
+        
         vector = torch.round(vector / vect_scale_factor if vect_scale_factor != 0.0 else vector).type(torch.long)
         if v_bits > 1 and vector.numel() > 1:
             bit_vector = torch.flip(vector.unsqueeze(-1).bitwise_and(2**torch.arange(v_bits)).ne(0).byte().squeeze(), (1,)).type(torch.float) * self.crossbar.V
         else:
-            bit_vector = vector.type(torch.float) * self.crossbar.V
+            bit_vector = torch.ones(vector.size()).type(torch.float) * self.crossbar.V
 
+    
         # Pad bit vector with unselected voltages
         pad_vector = torch.zeros(self.crossbar.size[0], v_bits)
         pad_vector[self.row:self.row + self.m_rows,:] = bit_vector
@@ -54,20 +56,17 @@ class ticket:
 
         # Solve crossbar circuit
         output = crossbar.solve(pad_vector)
-        
+
         # Get relevant output columns and add binary outputs
         output = output.view(v_bits, -1, 2)[:, :, 0] - output.view(v_bits, -1, 2)[:, :, 1]
+
         for i in range(output.size(0)):
             output[i] *= 2**(v_bits - i - 1)
+
         output = torch.sum(output, axis=0)[self.col:self.col + self.m_cols]
 
-        # Rescale output
-        magic_number = 1 # can use to compensate for resistive losses in the lines. Recommend multiplying a bunch of 8x8 integer matrices to find this.
-
-        output = (output / crossbar.V * vect_scale_factor * self.mat_scale_factor) / magic_number + vect_min * self.row_sum
+        output = (output / crossbar.V * vect_scale_factor * self.mat_scale_factor) + vect_min * self.row_sum
         return output.view(-1, 1)
-
-
 
 class ticket_direct:
     def __init__(self, index, row, col, m_rows, m_cols, conductance_matrix, crossbar):

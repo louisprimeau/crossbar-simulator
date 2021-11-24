@@ -50,6 +50,10 @@ class crossbar:
 
         # Device Programming Error approximation
         # 'linear' programming assumes that there is are 2^resolution states between the on and off resistances of the device.
+
+        self.r_on = device_params["r_on"]
+        self.r_off = device_params["r_off"]
+        
         # Any number programmed onto the crossbar is rounded to one of those states.
         if (self.method == "linear"):
 
@@ -67,7 +71,7 @@ class crossbar:
                                              for i in range(self.size[0])],dim=0)
 
         # 'viability' assumes ideal programming to any conductance but the end result is perturbed by gaussian noise with spread
-        # equal to some percentage (the "viability") of the conductance. 
+        # equal to some percentage (the "viability") of the conductance.
         elif self.method == "viability":
 
             
@@ -78,7 +82,6 @@ class crossbar:
             #self.g_on = 1 / torch.normal(device_params["r_on"], device_params["r_on_stddev"], size=self.size)
             #self.g_off = 1 / torch.normal(device_params["r_off"], device_params["r_off_stddev"], size=self.size) 
             #self.viability = device_params["viability"]
-            
             
         else:
             raise ValueError("device_params['method'] must be \"linear\" or \"viability\"")
@@ -100,14 +103,17 @@ class crossbar:
         self.r_cmos_line = device_params["r_cmos_line"]
 
         # WL & BL resistances
-        self.g_s_wl_in = torch.ones(self.tile_rows) * 1e12
-        self.g_s_wl_out = torch.ones(self.tile_rows) * 1e-12
-        self.g_s_bl_in = torch.ones(self.tile_rows) * 1e-12
-        self.g_s_bl_out = torch.ones(self.tile_rows) * 1e12
+        self.r_in = device_params["r_in"]
+        self.r_out = device_params["r_out"]
+        
+        self.g_s_wl_in = torch.ones(self.tile_rows) / self.r_in
+        self.g_s_wl_out = torch.ones(self.tile_rows) * 1e-15 # floating
+        self.g_s_bl_in = torch.ones(self.tile_rows) * 1e-15 # floating
+        self.g_s_bl_out = torch.ones(self.tile_rows) / self.r_out
 
         # WL & BL voltages that are not the signal, assume bl_in, wl_out are tied low and bl_out is tied to 1 V. 
         self.v_bl_in = torch.zeros(self.size[1])
-        self.v_bl_out = torch.ones(self.size[1])
+        self.v_bl_out = torch.zeros(self.size[1])
         self.v_wl_out = torch.zeros(self.size[0])
 
         
@@ -116,7 +122,7 @@ class crossbar:
         self.E = torch.cat((E_B, E_W))
 
         # Conductance Matrix; initialize each memristor at the on resstance
-        self.W = torch.ones(self.size) * self.g_on
+        self.W = torch.ones(self.size) * self.g_on + torch.randn(self.size) * self.g_on * 0.1
 
         # Stuck-on & stuck-on device nonideality 
         self.p_stuck_on = device_params["p_stuck_on"]
@@ -132,12 +138,24 @@ class crossbar:
 
         # NOT TESTED: GPU CAPABILITY
         # self.device = device_params["device"]
+        self.write_voltage = 1
+        self.write_pulse_period = 200e-9
+        self.read_pulse_period = 1e-3
+
+        self.calculate_power = True
+        self.read_energy = 0.0
+        self.write_energy = 0.0
+        self.read_ops = 0
+        self.write_ops = 0
+        self.num_pulses = 100
         
     # Iterates through the tiles and solves each and then adds their outputs together. 
-    def solve(self, voltage):
+    def solve(self, voltage, return_power=False):
+
+        P = 0.0
+        
         p_tiles = self.programmed_tiles()
         output = torch.zeros((voltage.size(1), self.size[1]))
-        
         for i, j in p_tiles:
             coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
             if str(coords) not in self.saved_tiles.keys():
@@ -149,16 +167,19 @@ class crossbar:
             Es_all[i] = self.make_Es(voltage[i*self.tile_rows:(i+1)*self.tile_rows,:])
             
         for i, j in p_tiles:
-            coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
-            #print(Es_all)
+            coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))    
             M = self.saved_tiles[str(coords)]
             V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es_all[i]), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
-            #print("V",V)
-            I = torch.sum(V * self.W[coords], axis=1)
+            I_all = V * self.W[coords]
+            if self.calculate_power: P += torch.sum(I_all * V)
+            I = torch.sum(I_all, axis=1)
             output[:, j*self.tile_cols:(j+1)*self.tile_cols] += I 
 
+        if self.calculate_power: self.read_energy += P * 1e-7
         self.current_history.append(output)
 
+        self.read_ops += 1
+        if return_power: return P
         return output
 
     # extremely lazy implementation of finding which tiles have been programmed. But crossbars aren't very large so whatever.
@@ -226,7 +247,7 @@ class crossbar:
         return M
 
     # Handles programming for the crossbar instance. 
-    def register_linear(self, matrix, bias=None, row=None, col=None, index=None):
+    def register_linear(self, matrix, bias=None, row=None, col=None, index=None, bypass=False):
         assert not ((row is not None) and (col is not None) and (index is not None)), "either specify (row and col) or (index) or (neither). cannot specify both"
         
         with torch.no_grad():
@@ -237,8 +258,8 @@ class crossbar:
 
                 index = len(self.tensors)
                 self.tensors.append(matrix)
-                row, col = self.find_space(matrix.size(0), matrix.size(1))
-
+                row, col = self.find_space(matrix.size(0), matrix.size(1)*2)
+                
             elif (row is None and col is None and index is not None):
 
                 self.tensors[index] = matrix
@@ -268,20 +289,41 @@ class crossbar:
 
             elif (self.method == "viability"):
                 new_W = self.W.clone().detach()
-                mat_scale_factor = torch.max(torch.abs(matrix)) / (torch.max(self.g_on) - torch.min(self.g_off)) * 2
+                mat_scale_factor = torch.max(torch.abs(matrix)) / (torch.max(self.g_on) - torch.min(self.g_off)) * 3
+                if mat_scale_factor == 0.0: mat_scale_factor = 1.0
                 scaled_matrix = matrix / mat_scale_factor
-                for i in range(row, row + scaled_matrix.size(0)):
-                   for j in range(col, col + scaled_matrix.size(1)):
-                       midpoint = (self.g_on[i,j] - self.g_off[i,j]) / 2 + self.g_off[i,j]
-                       right_state = midpoint + scaled_matrix[i-row,j-col] / 2
-                       left_state = midpoint - scaled_matrix[i-row,j-col] / 2
-                       new_W[i,2*j+1] = self.clip(right_state + torch.normal(mean=0, std=right_state*self.viability), i, 2*j+1)
-                       new_W[i,2*j] = self.clip(left_state + torch.normal(mean=0,std=left_state*self.viability), i, 2*j) if left_state > 0.0 else 0.0
+                midpoint = 5.5e-5
+                right_state, left_state = midpoint + scaled_matrix / 2,  midpoint - scaled_matrix / 2
+                right_state = right_state + torch.randn(right_state.size()) * right_state * self.viability
+                left_state = left_state + torch.randn(left_state.size()) * left_state * self.viability
+                out = torch.stack((left_state, right_state), dim=2).view(right_state.size(0), right_state.size(1) * 2)
+
+                if bypass:
+                    out = torch.ones_like(out) / self.r_off
+                    out = out + torch.randn(out.size()) * 0.25 * out
+
+                new_W[row:row+scaled_matrix.size(0), col:col + scaled_matrix.size(1) * 2] = out
                 self.W = new_W
+
+                if self.calculate_power:
+                    Ns = torch.round((out - 1/self.r_off) * self.num_pulses * self.r_on)
+                    if bypass: Ns = self.num_pulses * torch.ones_like(Ns)
+                    write_energy_out = torch.sum(self.write_voltage**2 * Ns * out * self.write_pulse_period)
+                    read_pulse_power_row = torch.zeros(scaled_matrix.size(0))
+                    for i in range(scaled_matrix.size(0)):
+                        read_voltage = torch.Tensor([0] * (row + i) + [self.V] + [0] * (self.size[0] - row - i - 1)).unsqueeze(1)
+                        read_pulse_power_row[i] = self.solve(read_voltage, return_power=True)
+                    verification_energy_out = torch.sum(read_pulse_power_row * torch.sum(Ns, dim=1)) * self.read_pulse_period
+                    write_energy_out = write_energy_out + verification_energy_out
+                    self.write_energy += write_energy_out
+                    
+
+               
             if not self.deterministic: self.apply_stuck()
 
+        self.write_ops += 1
         self.saved_tiles = {}
-        return ticket(index, row, col, matrix.size(0), matrix.size(1), matrix, mat_scale_factor, self)
+        return ticket(index, row, col // 2, matrix.size(0), matrix.size(1), matrix, mat_scale_factor, self)
     
     def clip(self, tensor, i, j):
         assert self.g_off[i, j] < self.g_on[i, j]
@@ -297,8 +339,8 @@ class crossbar:
         )
 
     def find_space(self, m_row, m_col):
-
-        if m_row > self.size[0] or m_col*2 > self.size[1]:
+        print(m_row, m_col)
+        if m_row > self.size[0] or m_col > self.size[1]:
                 raise ValueError("Matrix with size ({}, {}) is too large for crossbar of size ({}, {})".format(m_row, m_col, self.size[0], self.size[1]))
             
         # Format is (*indexes of top left corner, *indexes of bottom right corner + 1 (it's zero indexed))
@@ -308,8 +350,10 @@ class crossbar:
             if self.mapped[-1][3] + m_col < self.size[1]:
                 self.mapped.append((self.mapped[-1][0], self.mapped[-1][1] + self.mapped[-1][3], m_row, m_col))
             else:
-                if m_col > (self.size[0] - self.mapped[-1][2]):
-                    raise ValueError("Matrix with {} rows does not fit on crossbar with {} free rows".format(m_col, self.size[0] - self.mapped[-1][2]))    
+                if m_row > (self.size[0] - self.mapped[-1][2]):
+                    print(m_col, self.size[0], self.mapped[-1][2])
+                    raise ValueError("Matrix with {} rows does not fit on crossbar with {} free rows".format(m_col, self.size[0] - self.mapped[-1][2]))
+                    
                 self.mapped.append((self.mapped[-1][2], 0, m_row, m_col))
                 
         #self.mapped.append((self.mapped[-1][0] + self.mapped[-1][2], self.mapped[-1][1] + self.mapped[-1][3], m_row, m_col))
