@@ -1,4 +1,4 @@
-# node-crossbar 
+# crossbar-simulator 
 
 This repo is my current work on simulating neural networks over memristor crossbars. If you're looking at this repo, you probably want to see the crossbar simulation code.
 
