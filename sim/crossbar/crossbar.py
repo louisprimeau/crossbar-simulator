@@ -20,8 +20,7 @@ import numpy as np
 import itertools
 import time
 import warnings
-
-from .ticket import ticket
+from . import util
 
 class crossbar:
     def __init__(self, device_params, deterministic=False):
@@ -80,6 +79,9 @@ class crossbar:
         E_W = torch.cat([torch.cat(((torch.zeros(1) * self.g_s_wl_in[i]).view(1), torch.zeros(self.tile_cols-2), (self.v_wl_out[i].view(1) * self.g_s_wl_out[i]).view(1))) for i in range(self.tile_rows)]).unsqueeze(1)
         self.E = torch.cat((E_B, E_W))
 
+        # Programming Viability
+        self.viability = device_params["viability"]
+
         # Conductance Matrix; initialize each memristor at the on resistance
         self.W = torch.ones(self.size) * self.g_on + torch.randn(self.size) * self.g_on * 0.1
 
@@ -110,7 +112,6 @@ class crossbar:
 
     # Iterates through the tiles and solves each and then adds their outputs together. 
     def solve(self, voltage):
-        P = 0.0
         p_tiles = self.programmed_tiles()
         output = torch.zeros((voltage.size(1), self.size[1]))
         for i, j in p_tiles:
@@ -128,14 +129,8 @@ class crossbar:
             M = self.saved_tiles[str(coords)]
             V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es_all[i]), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
             I_all = V * self.W[coords]
-            if self.calculate_power: P += torch.sum(I_all * V)
             I = torch.sum(I_all, axis=1)
             output[:, j*self.tile_cols:(j+1)*self.tile_cols] += I 
-
-        if self.calculate_power: self.read_energy += P * 1e-7
-        if self.record_current: self.current_history.append(output)
-        self.read_ops += 1
-        
         return output
     
     # Constructs the M matrix in MV = E. 
@@ -206,9 +201,28 @@ class crossbar:
         self.W = new_W
 
         if not self.deterministic: self.apply_stuck()
-        self.tickets.append(ticket(index, row, col // 2, matrix.size(0), matrix.size(1), matrix, mat_scale_factor, self.precision, self))
+        self.tickets.append(Ticket(index, row, col // 2, matrix.size(0), matrix.size(1), matrix, self, differential=True, scale=mat_scale_factor))
         return self.tickets[-1]
     
+    @torch.no_grad()
+    def register_bit_matrix(self, bit_matrix):
+
+        n_bits = bit_matrix.size(0)
+        matrix = torch.sum(2**(torch.flip(torch.arange(n_bits), dims=(0,))).reshape(-1, 1, 1) * bit_matrix, axis=0)
+        assert len(self.tensors) == len(self.mapped), "tensors and indices out of sync"            
+        index = len(self.tensors)
+        self.tensors.append(matrix)
+        row, col = self.find_space(matrix.size(0), matrix.size(1))
+
+        g_on, g_off = 1 / self.r_on, 1 / self.r_off
+        states = g_off + (g_on - g_off) * matrix / (2**n_bits - 1)
+        self.W[row:row+matrix.size(0), col:col+matrix.size(1)] = states + torch.randn(matrix.size()) * states * self.viability
+        if not self.deterministic: self.apply_stuck()
+        self.tickets.append(Ticket(index, row, col, matrix.size(0), matrix.size(1), matrix, self, n_bits, differential=False))
+
+        return self.tickets[-1]
+
+
     def clip(self, tensor, i, j):
         assert self.g_off[i, j] < self.g_on[i, j]
         return torch.clip(tensor, min=self.g_off[i, j], max=self.g_on[i, j])
@@ -223,7 +237,6 @@ class crossbar:
         )
 
     def find_space(self, m_row, m_col):
-        print(m_row, m_col)
         if m_row > self.size[0] or m_col > self.size[1]:
                 raise ValueError("Matrix with size ({}, {}) is too large for crossbar of size ({}, {})".format(m_row, m_col, self.size[0], self.size[1]))
             
@@ -235,7 +248,6 @@ class crossbar:
                 self.mapped.append((self.mapped[-1][0], self.mapped[-1][1] + self.mapped[-1][3], m_row, m_col))
             else:
                 if m_row > (self.size[0] - self.mapped[-1][2]):
-                    print(m_col, self.size[0], self.mapped[-1][2])
                     raise ValueError("Matrix with {} rows does not fit on crossbar with {} free rows".format(m_col, self.size[0] - self.mapped[-1][2]))
                     
                 self.mapped.append((self.mapped[-1][2], 0, m_row, m_col))
@@ -255,9 +267,10 @@ class crossbar:
         return pad_vector, vect_scale_factor, vect_min
 
     def vmm(self, ticket, vector):
-        Vs, vect_scale_factor, vect_min = self.make_V(vector, ticket.v_bits)
-        output = self.solve(pad_vector)
-        output = output.view(ticket.v_bits, -1, 2)[:, :, 0] - output.view(ticket.v_bits, -1, 2)[:, :, 1]
+        Vs, vect_scale_factor, vect_min = self.make_V(vector, ticket.v_bits, ticket.row, ticket.m_rows)
+        output = self.solve(Vs)
+        if ticket.differential:
+            output = output.view(ticket.v_bits, -1, 2)[:, :, 0] - output.view(ticket.v_bits, -1, 2)[:, :, 1]
         for i in range(output.size(0)): output[i] *= 2**(ticket.v_bits - i - 1)
         output = torch.sum(output, axis=0)[ticket.col:ticket.col + ticket.m_cols]
         output = (output / self.V * vect_scale_factor * ticket.mat_scale_factor) + vect_min * ticket.row_sum
@@ -268,3 +281,21 @@ class crossbar:
         self.tensors = []
         self.saved_tiles = {}
         self.W = torch.ones(self.size) * self.g_on
+
+
+class Ticket:
+    def __init__(self, index, row, col, m_rows, m_cols, matrix, crossbar, v_bits, differential=False, scale=1.0):
+        self.row, self.col = row, col
+        self.m_rows, self.m_cols = m_rows, m_cols
+        self.crossbar = crossbar
+        self.matrix = matrix
+        self.index = index
+        self.row_sum = torch.sum(self.matrix, axis=0)
+        self.v_bits = v_bits
+        self.differential = differential
+        self.mat_scale_factor = scale
+
+    def free(self):
+        self.crossbar.tensors = self.crossbar.tensors[:self.index] + self.crossbar.tensors[self.index+1:]
+        self.crossbar.mapped = self.crossbar.mapped[:self.index] + self.crossbar.mapped[self.index+1:]
+        self.crossbar.tickets = self.crossbar.tickets[:self.index] + self.crossbar.tickets[self.index+1:]
