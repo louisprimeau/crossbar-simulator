@@ -1,21 +1,31 @@
-
+import math
 import torch
+from . import util
 class adc:
 
-    def __init__(self, params):
-        
-        self.resolution = params['resolution']
-        self.V_ref_Hi = params['V_ref_Hi']
-        self.V_ref_Lo = params['V_ref_Lo']
-        self.TI = params['TI']
-        
-    def V_read(self, V):
-        assert len(V.size()) == 1
-        lo, hi = self.V_ref_Lo, self.V_ref_Hi
-        V = torch.clip(V, min=lo, max=hi)
-        V = (V - lo) / (hi - lo)
-        return torch.flip(vector.unsqueeze(-1).bitwise_and(2**torch.arange(self.resolution)).ne(0).byte().squeeze(), (1,)).type(torch.float)
+    def __init__(self, crossbar, resolution):
 
-    def I_read(self, I):
-        return V_read(I * self.TI)
+        self.resolution = resolution
 
+        crossbar.find_space(2, 2)
+
+        crossbar.W = torch.clone(crossbar.g_off)
+        crossbar.W[:,0] = crossbar.g_on[:, 0]
+        vector = torch.ones(crossbar.size[0], 1) * crossbar.V
+        max_current = torch.max(crossbar.solve(vector))
+
+        crossbar.W = torch.clone(crossbar.g_off)
+        vector = torch.ones(1, 1)
+        Vs, _, _ = crossbar.make_V(vector, 1, 0, 1)
+        min_current = torch.min(crossbar.solve(Vs))
+
+        print("Max current:", max_current)
+        print("Min current:", min_current)
+
+        self.levels = torch.linspace(min_current, max_current, 2**self.resolution)
+
+        crossbar.mapped =  crossbar.mapped[:-1]
+
+    def read_currents(self, I):
+        out = util.round_to(I, self.levels)
+        return out / (2**self.resolution - 1)

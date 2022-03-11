@@ -15,12 +15,13 @@ An Chen
 IEEE TRANSACTIONS ON ELECTRON DEVICES, VOL. 60, NO. 4, APRIL 2013
 """
 
+from traceback import print_last
 import torch
 import numpy as np
 import itertools
 import time
 import warnings
-from . import util
+from . import util, adc
 
 class crossbar:
     def __init__(self, device_params, deterministic=False):
@@ -47,9 +48,6 @@ class crossbar:
         assert self.size[0] % self.tile_rows == 0, "tile size does not divide crossbar size in row direction"
         assert self.size[1] % self.tile_cols == 0, "tile size does not divide crossbar size in col direction"
         
-        # Resistance of CMOS lines (NOT IMPLEMENTED)
-        self.r_cmos_line = device_params["r_cmos_line"]
-
         # Input & Output resistances
         self.r_in = device_params["r_in"]
         self.r_out = device_params["r_out"]
@@ -65,9 +63,9 @@ class crossbar:
 
         # Set up conductances around edges of crossbar
         self.g_s_wl_in = torch.ones(self.tile_rows) / self.r_in
-        self.g_s_wl_out = torch.ones(self.tile_rows) * 1e-15 # floating
-        self.g_s_bl_in = torch.ones(self.tile_rows) * 1e-15 # floating
-        self.g_s_bl_out = torch.ones(self.tile_rows) / self.r_out
+        self.g_s_wl_out = torch.ones(self.tile_rows) * 1e-9 # floating
+        self.g_s_bl_in = torch.ones(self.tile_cols) * 1e-9 # floating
+        self.g_s_bl_out = torch.ones(self.tile_cols) / self.r_out
 
         # WL & BL voltages that are not the signal, assume bl_in, wl_out are tied low and bl_out is tied to 1 V. 
         self.v_bl_in = torch.zeros(self.size[1])
@@ -83,7 +81,7 @@ class crossbar:
         self.viability = device_params["viability"]
 
         # Conductance Matrix; initialize each memristor at the on resistance
-        self.W = torch.ones(self.size) * self.g_on + torch.randn(self.size) * self.g_on * 0.1
+        self.W = torch.ones(self.size) * self.g_on #+ torch.randn(self.size) * self.g_on * 0.1
 
         # Stuck-on & stuck-on device nonideality 
         self.p_stuck_on = device_params["p_stuck_on"]
@@ -115,7 +113,7 @@ class crossbar:
         p_tiles = self.programmed_tiles()
         output = torch.zeros((voltage.size(1), self.size[1]))
         for i, j in p_tiles:
-            coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))
+            coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_cols))
             if str(coords) not in self.saved_tiles.keys():
                 self.make_M(coords) # Lazy hash
 
@@ -123,22 +121,21 @@ class crossbar:
         Es_all = [None] * (self.size[0] // self.tile_rows)
         for i in set(j for j, _ in p_tiles):
             Es_all[i] = self.make_Es(voltage[i*self.tile_rows:(i+1)*self.tile_rows,:])
-            
+        
         for i, j in p_tiles:
-            coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_rows))    
+            coords = (slice(i*self.tile_rows, (i+1)*self.tile_rows), slice(j*self.tile_cols, (j+1)*self.tile_cols))    
             M = self.saved_tiles[str(coords)]
-            V = torch.transpose(-torch.sub(*torch.chunk(torch.matmul(M, Es_all[i]), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
+            V = torch.transpose(torch.sub(*torch.chunk(torch.matmul(M, Es_all[i]), 2, dim=0)), 0, 1).view(-1, self.tile_rows, self.tile_cols)
             I_all = V * self.W[coords]
             I = torch.sum(I_all, axis=1)
             output[:, j*self.tile_cols:(j+1)*self.tile_cols] += I 
+
         return output
     
     # Constructs the M matrix in MV = E. 
     def make_M(self, coords):
-
         g = self.W[coords]
         m, n = self.tile_rows, self.tile_cols
-
         def makea(i):
             return torch.diag(g[i,:]) \
                  + torch.diag(torch.cat((self.g_wl, self.g_wl * 2 * torch.ones(n-2), self.g_wl))) \
@@ -151,7 +148,6 @@ class crossbar:
         
         def maked(j):
             d = torch.zeros(m, m*n)
-            
             i = 0
             d[i, j] = -self.g_s_bl_in[j] - self.g_bl - g[i, j]
             d[i, n*(i+1) + j] = self.g_bl
@@ -170,7 +166,7 @@ class crossbar:
         A = torch.block_diag(*tuple(makea(i) for i in range(m)))
         B = torch.block_diag(*tuple(-torch.diag(g[i,:]) for i in range(m)))
         C = torch.cat([makec(j) for j in range(n)],dim=0)
-        D = torch.cat([maked(j) for j in range(0,n)], dim=0)
+        D = torch.cat([maked(j) for j in range(n)], dim=0)
 
         M = torch.cat((torch.cat((A,B),dim=1), torch.cat((C,D),dim=1)), dim=0)
         M = torch.inverse(M)
@@ -206,7 +202,6 @@ class crossbar:
     
     @torch.no_grad()
     def register_bit_matrix(self, bit_matrix):
-
         n_bits = bit_matrix.size(0)
         matrix = torch.sum(2**(torch.flip(torch.arange(n_bits), dims=(0,))).reshape(-1, 1, 1) * bit_matrix, axis=0)
         assert len(self.tensors) == len(self.mapped), "tensors and indices out of sync"            
@@ -219,7 +214,6 @@ class crossbar:
         self.W[row:row+matrix.size(0), col:col+matrix.size(1)] = states + torch.randn(matrix.size()) * states * self.viability
         if not self.deterministic: self.apply_stuck()
         self.tickets.append(Ticket(index, row, col, matrix.size(0), matrix.size(1), matrix, self, n_bits, differential=False))
-
         return self.tickets[-1]
 
 
@@ -256,24 +250,37 @@ class crossbar:
         return self.mapped[-1][0], self.mapped[-1][1] 
 
     def make_V(self, vector, v_bits, row, m_rows):
-        vect_min = torch.min(vector) if vector.numel() > 1 else 0.0
+        """vect_min = torch.min(vector) - 1.0 if vector.numel() > 1 else -1.0
         vector = vector - vect_min
         vect_scale_factor = torch.max(vector) / (2**v_bits - 1)
         vector = torch.round(vector / vect_scale_factor if vect_scale_factor != 0.0 else vector).type(torch.long)
         if v_bits > 1 and vector.numel() > 1: bit_vector = torch.flip(vector.unsqueeze(-1).bitwise_and(2**torch.arange(v_bits)).ne(0).byte().squeeze(), (1,)).type(torch.float) * self.V
-        else: bit_vector = torch.ones(vector.size()).type(torch.float) * self.V
+        else: bit_vector = torch.ones(vector.size()).type(torch.float) * self.V"""
+        bit_vector, _, vect_min, vect_scale_factor = util.bit_slice(vector, v_bits, n=1)
         pad_vector = torch.zeros(self.size[0], v_bits)
-        pad_vector[row:row + m_rows,:] = bit_vector
+        pad_vector[row:row + m_rows,:] = bit_vector[0].T * self.V
         return pad_vector, vect_scale_factor, vect_min
 
-    def vmm(self, ticket, vector):
-        Vs, vect_scale_factor, vect_min = self.make_V(vector, ticket.v_bits, ticket.row, ticket.m_rows)
+    def vmm(self, ticket, vector, v_bits):
+        print("vmm \n --------------------------------")
+        Vs, vect_scale_factor, vect_min = self.make_V(vector, v_bits, ticket.row, ticket.m_rows)
+        print("Vs", Vs)
         output = self.solve(Vs)
-        if ticket.differential:
-            output = output.view(ticket.v_bits, -1, 2)[:, :, 0] - output.view(ticket.v_bits, -1, 2)[:, :, 1]
-        for i in range(output.size(0)): output[i] *= 2**(ticket.v_bits - i - 1)
-        output = torch.sum(output, axis=0)[ticket.col:ticket.col + ticket.m_cols]
-        output = (output / self.V * vect_scale_factor * ticket.mat_scale_factor) + vect_min * ticket.row_sum
+        if ticket.differential: output = output.view(v_bits, -1, 2)[:, :, 0] - output.view(v_bits, -1, 2)[:, :, 1]
+        else: adc_output = self.adc.read_currents(output)
+        output = adc_output * (self.size[0] * (2**ticket.n_bits-1))
+        for b in range(v_bits):
+            print(Vs[:, b])
+            print(adc_output[b])
+            print(output[b])
+            print(self.W)
+            print("\n")
+        for i in range(output.size(0)): output[i] *= 2**(v_bits - i - 1)
+        print("vmm outputs", output)
+        print(vect_scale_factor)
+        output = torch.sum(output, axis=0)[ticket.col:ticket.col + ticket.m_cols] * vect_scale_factor
+        print(output)
+        print("-----------------------------------------")
         return output.view(-1, 1)
         
     def clear(self):
@@ -282,18 +289,22 @@ class crossbar:
         self.saved_tiles = {}
         self.W = torch.ones(self.size) * self.g_on
 
+    def attach_adc(self, resolution):
+        assert len(self.tensors) == 0
+        self.adc = adc.adc(self, resolution)
+
 
 class Ticket:
-    def __init__(self, index, row, col, m_rows, m_cols, matrix, crossbar, v_bits, differential=False, scale=1.0):
+    def __init__(self, index, row, col, m_rows, m_cols, matrix, crossbar, n_bits, differential=False, scale=1.0):
         self.row, self.col = row, col
         self.m_rows, self.m_cols = m_rows, m_cols
         self.crossbar = crossbar
         self.matrix = matrix
         self.index = index
         self.row_sum = torch.sum(self.matrix, axis=0)
-        self.v_bits = v_bits
         self.differential = differential
         self.mat_scale_factor = scale
+        self.n_bits = n_bits
 
     def free(self):
         self.crossbar.tensors = self.crossbar.tensors[:self.index] + self.crossbar.tensors[self.index+1:]

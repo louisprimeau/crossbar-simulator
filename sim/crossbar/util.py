@@ -28,30 +28,38 @@ class MinMaxScaler(object):
 @torch.no_grad()
 def bit_slice(tensor, bits, n=1):
     assert bits % n  == 0
-    
+
+    print("inside bit slice\n-------------------")
+    print("num bits:", bits)
+    print(tensor)
     shape = tensor.size()
     tensor = tensor.view(-1)
-    bpd = bits // n
-    low = torch.min(tensor) - 1 #to prevent infinite orders of magnitude
-    r = (torch.max(tensor) - low) / (2**bits - 1)
-
+    bpc = bits // n
+    low = torch.min(tensor) #to prevent infinite orders of magnitude
+    print(2**bits - 1)
+    r = (torch.max(tensor) - low) / (2**bits - 1) # SCALING HERE !!!!!!!
     if r == 0:
-        tensors = [torch.cat((torch.ones(1, *shape), torch.zeros(bpd - 1, *shape)), axis=0)] + [torch.zeros(bpd, *shape) for i in range(n-1)]
+        tensors = [torch.cat((torch.ones(1, *shape), torch.zeros(bpc - 1, *shape)), axis=0)] + [torch.zeros(bpc, *shape) for i in range(n-1)]
         return tensors, [1] + [0] * (n - 1), low, r
     else: 
-        tensor = (tensor - low)  / r
-        print(tensor)
-        tensor = tensor.type(torch.int32)
-        print(tensor)
+        tensor = (tensor - low) / r
+        tensor = torch.round(tensor).type(torch.int32)
+    if bits == 1: return [(tensor > 0.5).type(torch.float).reshape(1, *shape)], [1], low, r
     bit_tensor = torch.flip(tensor.unsqueeze(-1).bitwise_and(2**torch.arange(bits)).ne(0).byte().squeeze(), (1,)).type(torch.float)
-    weights = [sum(2**b for b in range(vb1, vb1+bpd)) / (2**bpd - 1) - 1 for vb1 in range(0, bits, bpd)]
-    tensors = [bit_tensor[:, i:i+bpd].transpose(0, 1).reshape(bpd, *shape) for i in range(0, bits, bpd)]
+    lsc = 2**bpc - 1
+    weights = list(reversed([sum(2**b for b in range(vb1, vb1+bpc)) / lsc for vb1 in range(0, bits, bpc)])) # actually just powers of 2
+    tensors = [bit_tensor[:, i:i+bpc].transpose(0, 1).reshape(bpc, *shape) for i in range(0, bits, bpc)]
+    print(r)
+    print("-------------")
     return tensors, weights, low, r
 
 @torch.no_grad()
 def bit_join(tensors, weights, low, r):
+    out = 0
+    for tensor, weight in zip(tensors, reversed(weights)):
+        print("bj weight", weight, tensor)
+        out += tensor * weight
     return sum(tensor * weight for tensor, weight in zip(tensors, weights)) * r + low
-
 
 def bittensor2string(tensor):
     sz = tensor.size()
@@ -61,6 +69,6 @@ def bittensor2string(tensor):
     for i, col in enumerate(str_arr): new_arr[i] = ''.join(col)
     return np.array2string(new_arr.reshape(sz[1:]))
 
-
-
-    
+def round_to(tensor, levels):
+    size = tensor.size()
+    return torch.argmin(torch.abs(tensor.view(-1) - levels.view(-1, 1).expand(-1, tensor.numel())), axis=0).reshape(size)
