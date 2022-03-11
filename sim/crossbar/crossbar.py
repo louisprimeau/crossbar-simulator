@@ -262,27 +262,16 @@ class crossbar:
         return pad_vector, vect_scale_factor, vect_min
 
     def vmm(self, ticket, vector, v_bits):
-        print("vmm \n --------------------------------")
         Vs, vect_scale_factor, vect_min = self.make_V(vector, v_bits, ticket.row, ticket.m_rows)
-        print("Vs", Vs)
         output = self.solve(Vs)
         if ticket.differential: output = output.view(v_bits, -1, 2)[:, :, 0] - output.view(v_bits, -1, 2)[:, :, 1]
         else: adc_output = self.adc.read_currents(output)
         output = adc_output * (self.size[0] * (2**ticket.n_bits-1))
-        for b in range(v_bits):
-            print(Vs[:, b])
-            print(adc_output[b])
-            print(output[b])
-            print(self.W)
-            print("\n")
         for i in range(output.size(0)): output[i] *= 2**(v_bits - i - 1)
-        print("vmm outputs", output)
-        print(vect_scale_factor)
         output = torch.sum(output, axis=0)[ticket.col:ticket.col + ticket.m_cols] * vect_scale_factor
         output = output.view(-1, 1)
         offset = (vect_min * torch.ones(1, 3).mm(ticket.matrix)).view(-1, 1)
         output += offset
-        print("-----------------------------------------")
         return output
         
     def clear(self):

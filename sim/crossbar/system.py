@@ -30,8 +30,6 @@ class Interface:
     def vmm(self, vector):
         vs = [cb.vmm(ticket, vector, self.dac_bits) for cb, ticket in zip(self.crossbars, self.tickets)]
         offset = torch.ones_like(self.matrix.T).mm(vector) * self.m_min
-
-        print(vs)
         bjoin = util.bit_join(vs, self.weights, 0.0, self.m_range)
         out = bjoin + offset
         return out
