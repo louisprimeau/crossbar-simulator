@@ -279,9 +279,11 @@ class crossbar:
         print("vmm outputs", output)
         print(vect_scale_factor)
         output = torch.sum(output, axis=0)[ticket.col:ticket.col + ticket.m_cols] * vect_scale_factor
-        print(output)
+        output = output.view(-1, 1)
+        offset = (vect_min * torch.ones(1, 3).mm(ticket.matrix)).view(-1, 1)
+        output += offset
         print("-----------------------------------------")
-        return output.view(-1, 1)
+        return output
         
     def clear(self):
         self.mapped = []

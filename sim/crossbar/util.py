@@ -28,15 +28,10 @@ class MinMaxScaler(object):
 @torch.no_grad()
 def bit_slice(tensor, bits, n=1):
     assert bits % n  == 0
-
-    print("inside bit slice\n-------------------")
-    print("num bits:", bits)
-    print(tensor)
     shape = tensor.size()
     tensor = tensor.view(-1)
     bpc = bits // n
     low = torch.min(tensor) #to prevent infinite orders of magnitude
-    print(2**bits - 1)
     r = (torch.max(tensor) - low) / (2**bits - 1) # SCALING HERE !!!!!!!
     if r == 0:
         tensors = [torch.cat((torch.ones(1, *shape), torch.zeros(bpc - 1, *shape)), axis=0)] + [torch.zeros(bpc, *shape) for i in range(n-1)]
@@ -49,15 +44,12 @@ def bit_slice(tensor, bits, n=1):
     lsc = 2**bpc - 1
     weights = list(reversed([sum(2**b for b in range(vb1, vb1+bpc)) / lsc for vb1 in range(0, bits, bpc)])) # actually just powers of 2
     tensors = [bit_tensor[:, i:i+bpc].transpose(0, 1).reshape(bpc, *shape) for i in range(0, bits, bpc)]
-    print(r)
-    print("-------------")
     return tensors, weights, low, r
 
 @torch.no_grad()
 def bit_join(tensors, weights, low, r):
     out = 0
     for tensor, weight in zip(tensors, reversed(weights)):
-        print("bj weight", weight, tensor)
         out += tensor * weight
     return sum(tensor * weight for tensor, weight in zip(tensors, weights)) * r + low
 

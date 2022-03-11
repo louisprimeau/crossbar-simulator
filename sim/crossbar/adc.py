@@ -19,9 +19,6 @@ class adc:
         Vs, _, _ = crossbar.make_V(vector, 1, 0, 1)
         min_current = torch.min(crossbar.solve(Vs))
 
-        print("Max current:", max_current)
-        print("Min current:", min_current)
-
         self.levels = torch.linspace(min_current, max_current, 2**self.resolution)
 
         crossbar.mapped =  crossbar.mapped[:-1]
