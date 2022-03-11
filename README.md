@@ -2,7 +2,9 @@
 
 This repo is my current work on simulating neural networks over memristor crossbars. If you're looking at this repo, you probably want to see the crossbar simulation code.
 
-It is in sim/crossbar. Examples of how to use the simulator can be found in sim/networks. Basic neural network layers have been implemented there.
+It is in sim/crossbar. crossbar.py contains the bulk of the code for modelling a crossbar. The rest of the files provide utilities and interfaces to the main crossbar solver.
+
+sim/test_system.py is an example of how to use the code.
 
 Here is a brief explanation of the crossbar model:
 
