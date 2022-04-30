@@ -44,7 +44,9 @@ The user interface to the solver involves registering a matrix to the array. The
 
 The memristor model is a naive variability scheme in which a memristor is ideally mapped to a target conductance and then perturbed by gaussian noise with standard deviation equal to some percentage of the target conductance. Then a random selection of memristors are placed at the highest and lowest conductance states, imitating stuck-off and stuck-on nonidealities.
 Improving the memristor model could be done in two ways:
+
 • Coming up with a better scheme than the naive variability while still using static conducance values.
+
 • Using the circuit solver to time step the state of the entire crossbar. This would be the option for adding VTEAM.
 
 
