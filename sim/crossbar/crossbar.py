@@ -5,22 +5,15 @@ University of Toronto Department of Electrical and Computer Engineering
 louis.primeau@mail.utoronto.ca
 July 29th 2020
 Last updated: May 22nd 2021
-"""
 
-"""
 Circuit Solver taken from:
-
 A Comprehensive Crossbar Array Model With Solutions for Line Resistance and Nonlinear Device Characteristics
 An Chen
 IEEE TRANSACTIONS ON ELECTRON DEVICES, VOL. 60, NO. 4, APRIL 2013
 """
 
-from traceback import print_last
 import torch
-import numpy as np
 import itertools
-import time
-import warnings
 from . import util, adc
 
 class crossbar:

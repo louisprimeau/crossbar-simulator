@@ -30,11 +30,13 @@ which is the basic building block of all computational routines. This is impleme
 
 The crossbar solver implements the routines from [1]. This paper provides equations for the equilibrium solution of a fully passive crossbar array. Because our crossbar is semi-passive, options are given in the device_params dict to construct the array out of smaller tiles. Solving each 8x8 tile involves inverting a 128x128 matrix, since there are two nodes on either side of each memristor and there are 64 memristors. More details are given in the paper.
 Crossbar.py loops through the different tiles, applies the inverted matrices, and then sums the output currents. The floating point complexity of the solver is therefore (assuming a square crossbar) O(n^3 * N^2+ n^2 * N^2 * M * d) where
-n: tile size
-N: number of tiles
-d: bit precision of the input
-M: number of vmm operations with the same matrix, since inverted tiles are saved by the solver.
-assuming naive matrix inversion and vmm floating point complexity.
+
+n: tile size \
+N: number of tiles \
+d: bit precision of the input \
+M: number of vmm operations with the same matrix, since inverted tiles are saved by the solver. \
+
+assuming naive matrix inversion and vmm floating point complexity. \
 The user interface to the solver involves registering a matrix to the array. The crossbar class returns a ticket object, which has the method vmm which performs the vector matrix multiplication and then the appropriate addition and multiplication to rescale the output.
 
 
