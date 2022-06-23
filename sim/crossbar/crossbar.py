@@ -148,7 +148,7 @@ class crossbar:
             for i in range(1, m):
                 d[i, n*(i-1) + j] = self.g_bl
                 d[i, n*i + j] = -self.g_bl - g[i,j] - self.g_bl
-                d[i, j] = self.g_bl
+                d[i, n*(i+1) + j] = self.g_bl
                    
             i = m - 1
             d[i, n*(i-1) + j] = self.g_bl
